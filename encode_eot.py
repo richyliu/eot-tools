@@ -92,7 +92,7 @@ class EOTPacket:
         remainder = mod2div(appended_data, key)
         return ''.join(remainder)
 
-    def encode_message(self, bit_sync_bits=1000):
+    def encode_message(self, bit_sync_bits=64):
         data = self.encode_data_block()
         frame_sync = '11100010010'  # Frame sync bits
 

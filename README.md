@@ -18,3 +18,10 @@ Run `./main.py -h` to see the available options. Running `./main.py` without any
 Run `./main.py -a <audio_file>` to generate an audio WAV file that can be sent over FM.
 
 Use `./sample_decoder/decode.py <audio_file>` to decode the audio files generated.
+
+## Best progress so far
+
+This generates an EOT packet which is reliably detected by SoftEOT, but still is decoded as invalid:
+```sh
+./main.py -u 32312 -p 73 --no-motion --no-marker-light --no-marker-battery-weak --turbine -b 3 -c 0 -m normal --no-confirm --valve-circuit -a out.wav
+```

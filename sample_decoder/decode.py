@@ -32,10 +32,16 @@ def printEOT(EOT):
     print("Pressure:       {} psig".format(EOT.pressure))
     print("Motion:         {}".format(EOT.motion))
     print("Marker Light:   {}".format(EOT.mkr_light))
+    print("Marker Battery: {}".format(EOT.mkr_batt))
     print("Turbine:        {}".format(EOT.turbine))
     print("Battery Cond:   {}".format(EOT.batt_cond_text))
     print("Battery Charge: {}".format(EOT.batt_charge))
     print("Arm Status:     {}".format(EOT.arm_status))
+    print("Conf Ind:       {}".format(EOT.conf_ind))
+    print("Valve Circuit:  {}".format(EOT.valve_ckt_stat))
+    print("Spare:          {}".format(EOT.spare))
+    print("Message Type:   {}".format(EOT.message_type))
+    print("Checkbits Rx:   {}".format(EOT.checkbitsRx))
 
 
 def main(file_name):
@@ -46,7 +52,7 @@ def main(file_name):
         '-f', file_name,
         '-M', '1200',
         '-S', '1800',
-        '--sync-byte', '0xaa',
+        # '--sync-byte', '0xaa',
         '-c', '1.0',
         '--binary-raw', '8',
         '-q',
@@ -57,12 +63,15 @@ def main(file_name):
         return
     buffer = res.stdout.decode().replace('\n', '').replace(' ', '')
 
+    # frame_sync = '1011100010010'
     frame_sync = '10101011100010010'
     while buffer.find(frame_sync) >= 0:
         buffer = buffer[buffer.find(frame_sync):]
         EOT = EOT_decode(buffer[6:])  # first 6 bits are bit sync
         if (EOT.valid):
             printEOT(EOT)
+        else:
+            print('invalid EOT packet found')
         buffer = buffer[1:]
 
 

@@ -57,6 +57,8 @@ class EOT_decode():
         self.checkbits = helpers.checkbits(self.data_block, self.generator)
         self.checkbits_cipher = helpers.xor(self.checkbits, self.cipher_key)
         self.valid = (self.checkbits_cipher == self.checkbitsRx)  # a match?
+        if not self.valid:
+            print(f'got {self.checkbitsRx} expected {self.checkbits_cipher}')
 
     def get_packet(self):
         return ''.join(self.packet)
