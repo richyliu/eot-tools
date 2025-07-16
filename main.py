@@ -3,7 +3,6 @@
 import argparse
 import sys
 from encode_eot import EOTPacket
-from modulate import EOTRF
 
 
 def str2bool(v):
@@ -26,7 +25,7 @@ def parse_arguments():
 Examples:
   %(prog)s --unit-addr 654321 --pressure 80 --message-type arm
   %(prog)s -u 100000 -p 45 -c 85 --no-turbine --marker-battery-weak
-  %(prog)s -b 2 -m arm -s 800
+  %(prog)s -a out.wav
         '''
     )
     
@@ -161,6 +160,7 @@ def main():
 
         # Save to audio file if specified
         if args.save_audio_file:
+            from modulate import EOTRF
             eotrf = EOTRF()
             eotrf.with_message(encoded_packet, padded_silence=0.2)
 
