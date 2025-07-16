@@ -200,9 +200,9 @@ class EOTRF:
 
     def with_message(self, packet, padded_silence=0.2):
         assert all(c in ['0', '1'] for c in packet), "Packet must be a binary string"
-        self.message = packet
+        message = map(int, list(packet))
 
-        message_audio = self.afsk_encoder.bits_to_audio(self.message)
+        message_audio = self.afsk_encoder.bits_to_audio(message)
 
         silence_samples = int(self.afsk_encoder.sample_rate * padded_silence)
         silence = np.zeros(silence_samples)
