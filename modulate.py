@@ -23,7 +23,7 @@ def eprint(*args, **kwargs):
 class AFSKEncoder:
     """AFSK encoder for converting digital data to audio tones"""
 
-    def __init__(self, sample_rate=48000, baud_rate=1200, mark_freq=1200, space_freq=2200):
+    def __init__(self, sample_rate=44100, baud_rate=1200, mark_freq=1200, space_freq=2200):
         self.sample_rate = sample_rate
         self.baud_rate = baud_rate
         self.mark_freq = mark_freq    # Frequency for '1' bit
@@ -67,7 +67,7 @@ class AFSKEncoder:
 class FMModulator:
     """FM modulator for audio signals"""
 
-    def __init__(self, sample_rate=2000000, audio_sample_rate=48000, deviation=75000):
+    def __init__(self, sample_rate=2000000, audio_sample_rate=44100, deviation=75000):
         self.sample_rate = sample_rate
         self.audio_sample_rate = audio_sample_rate
         self.deviation = deviation
@@ -206,17 +206,17 @@ class EOTRF:
         message_audio = self.afsk_encoder.bits_to_audio(message)
 
         silence_samples = int(self.afsk_encoder.sample_rate * padded_silence)
-        # silence = np.zeros(silence_samples)
-        silence = np.sin(2 * np.pi * 700 * np.linspace(0, padded_silence, silence_samples, False)) * 0.4
+        silence = np.zeros(silence_samples)
+        # silence = np.sin(2 * np.pi * 700 * np.linspace(0, padded_silence, silence_samples, False)) * 0.4
 
         self.full_audio = np.concatenate([
             silence,
             message_audio,
             silence,
-            # message_audio,
-            # silence,
-            # message_audio,
-            # silence,
+            message_audio,
+            silence,
+            message_audio,
+            silence,
             # message_audio,
             # silence,
             # message_audio,

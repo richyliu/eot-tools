@@ -133,10 +133,14 @@ class EOTPacket:
         checkbits = self.calc_checkbits(data_block, generator)
         checkbits_cipher = xor(checkbits, cipher_key)
         packet += checkbits_cipher  # append checkbits
+        print('[INFO] bch checksum:', checkbits_cipher, file=sys.stderr)
 
         packet += '1' # dummy bit
 
         assert len(packet) == 64, "Encoded packet must be 64 bits long"
+
+        # for some reason, SoftEOT likes there to be 2 bits of padding before the data block
+        packet = '1' * 2 + packet
 
         print('[INFO] raw packet:', packet, file=sys.stderr)
 
