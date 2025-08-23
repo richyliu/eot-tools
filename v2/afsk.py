@@ -76,7 +76,9 @@ class AFSKEncoder:
         start = np.argmax(bitbounds)
 
         # get the bit values
-        total_len = (len(sig) - start) // self.samples_per_bit * self.samples_per_bit
+        total_len = ((len(sig) - start) // self.samples_per_bit - 1) * self.samples_per_bit
+        if total_len <= 0:
+            raise ValueError("Not enough data to decode AFSK signal")
         indices = np.linspace(start, start + total_len, total_len // self.samples_per_bit + 1).astype(int)
         if self.mark_freq < self.space_freq:
             sig = -sig  # Invert if space (0) frequency is higher than mark (1) frequency
@@ -117,6 +119,8 @@ def test():
     print('decoded:', decoded_bits)
     print('original:', test_bits)
     assert decoded_bits in test_bits, "Decoded bits do not match original bits"
+
+    print('Test OK')
 
 
 if __name__ == "__main__":

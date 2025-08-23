@@ -77,7 +77,7 @@ class BinaryPacketEncoderDecoder:
                     bin_value = format(value, f'0{size}b')
                 elif type_ == BinaryPacketFieldType.ENUM:
                     if value not in addl.values():
-                        raise ValueError(f"Invalid enum value for {name}")
+                        print(f'[WARNING] Value {value} for {name} not in enum mapping, using default 0', file=sys.stderr)
                     inv_map = {v: k for k, v in addl.items()}
                     bin_value = format(inv_map[value], f'0{size}b')[::-1]
 
@@ -119,14 +119,17 @@ class BinaryPacketEncoderDecoder:
                     raise ValueError(f"Enum mapping not provided for {name}")
                 le_value = int(bin_value[::-1], 2)
                 if le_value not in addl:
-                    raise ValueError(f"Invalid enum binary value for {name}")
-                value = addl[le_value]
+                    print(f"[WARNING] Invalid enum binary value for {name}: {le_value}", file=sys.stderr)
+                    value = le_value
+                else:
+                    value = addl[le_value]
             elif type_ == BinaryPacketFieldType.BCH:
                 generator, cipher_key = addl
                 value = bin_value
                 calc_checkbits = bch_encode(bin_str[:index - size], generator, cipher_key)
                 if value != calc_checkbits:
                     print(f"[WARNING] BCH checkbits do not match. Expected: {calc_checkbits}, got: {value}", file=sys.stderr)
+                    return None
 
             data[name] = value
 
@@ -137,6 +140,7 @@ class GenericParser:
     def __init__(self):
         self.encoder_decoder = BinaryPacketEncoderDecoder()
         self.frame_sync = ''
+        self.freq = 0
 
     def encode(self, data, bit_sync_bits=69, debug=False):
         raise NotImplementedError("Subclasses must implement encode method")
@@ -157,6 +161,14 @@ class GenericParser:
         data_bits = bitstr[data_start:data_end]
         data = self.encoder_decoder.decode(data_bits)
         return data
+
+    def pretty_print(self, data):
+        if not isinstance(data, dict):
+            raise ValueError("Data must be a dictionary")
+        print(self.__class__.__name__)
+        print(f"  Frequency: {self.freq / 1e6} MHz")
+        for key, value in data.items():
+            print(f"  {key}: {value}")
 
 
 class EOTParser(GenericParser):
@@ -180,6 +192,7 @@ class EOTParser(GenericParser):
             ('dummy', 1, BinaryPacketFieldType.UINTLE),
         ])
         self.frame_sync = '11100010010'
+        self.freq = 457_937_500
 
     def encode(self, data, bit_sync_bits=69, debug=False):
         bitstr = ''
@@ -203,6 +216,7 @@ class HOTParser(GenericParser):
             ('dummy', 1, BinaryPacketFieldType.UINTLE),
         ])
         self.frame_sync = '100011110001000100101001'
+        self.freq = 452_937_500
 
     def encode(self, data, bit_sync_bits=456, debug=False):
         bitstr = ''
