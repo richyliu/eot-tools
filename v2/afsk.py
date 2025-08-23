@@ -37,7 +37,7 @@ class AFSKEncoder:
 
         return audio
 
-    def decode(self, audio_signal, frame_sync='0101', debug=False):
+    def decode(self, audio_signal, frame_sync, debug=False):
         """Decode AFSK audio signal back to bits"""
 
         # resample if needed
@@ -94,8 +94,10 @@ class AFSKEncoder:
             plt.plot(sig, label='Demodulated Signal')
             plt.plot(bitbounds/40, label='Bit Boundaries', color='red')
             # plt.plot(np.linspace(start, start + len(all_mask), len(all_mask)), all_mask, label='Mask', color='green')
-            # plt.plot(audio_signal * 0.5, label='Original Audio Signal', alpha=0.5)
+            plt.plot(np.linspace(0, len(all_mask), len(all_mask)), all_mask, label='Mask', color='green')
+            plt.plot(audio_signal * 0.5, label='Original Audio Signal', alpha=0.5)
             plt.axvline(start, color='green', linestyle='--', label='Start Index')
+            plt.xlim(0, min(3000, len(sig)))
             for i in indices:
                 plt.axvline(i, color='orange', linestyle=':')
             plt.title('Demodulated Signal')

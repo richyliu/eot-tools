@@ -139,8 +139,8 @@ class BinaryPacketEncoderDecoder:
 class GenericParser:
     def __init__(self):
         self.encoder_decoder = BinaryPacketEncoderDecoder()
-        self.frame_sync = ''
-        self.freq = 0
+        self.frame_sync = None
+        self.freqs = None
 
     def encode(self, data, bit_sync_bits=69, debug=False):
         raise NotImplementedError("Subclasses must implement encode method")
@@ -163,10 +163,12 @@ class GenericParser:
         return data
 
     def pretty_print(self, data):
+        if data is None:
+            print("No valid data.")
+            return
         if not isinstance(data, dict):
             raise ValueError("Data must be a dictionary")
         print(self.__class__.__name__)
-        print(f"  Frequency: {self.freq / 1e6} MHz")
         for key, value in data.items():
             print(f"  {key}: {value}")
 
@@ -192,7 +194,9 @@ class EOTParser(GenericParser):
             ('dummy', 1, BinaryPacketFieldType.UINTLE),
         ])
         self.frame_sync = '11100010010'
-        self.freq = 457_937_500
+        self.freqs = [457_937_500]
+        self.afsk_mark_freq = 1200
+        self.afsk_space_freq = 1800
 
     def encode(self, data, bit_sync_bits=69, debug=False):
         bitstr = ''
@@ -216,7 +220,9 @@ class HOTParser(GenericParser):
             ('dummy', 1, BinaryPacketFieldType.UINTLE),
         ])
         self.frame_sync = '100011110001000100101001'
-        self.freq = 452_937_500
+        self.freqs = [452_937_500]
+        self.afsk_mark_freq = 1200
+        self.afsk_space_freq = 1800
 
     def encode(self, data, bit_sync_bits=456, debug=False):
         bitstr = ''
@@ -226,6 +232,34 @@ class HOTParser(GenericParser):
         bitstr += data * 3
         if debug:
             print(f"[DEBUG] HOT data portion: {data}")
+        return bitstr
+
+
+class DPUParser(GenericParser):
+    def __init__(self):
+        super().__init__()
+        self.encoder_decoder.add_fields([
+            ('unknown', 12, BinaryPacketFieldType.UINTLE),
+            ('origin', 3, BinaryPacketFieldType.ENUM, {3: 'LD', 4: 'RM'}),
+            ('repeat_code', 2, BinaryPacketFieldType.ENUM, {0: 'DI', 1: 'RP', 2: 'RO'}),
+            ('packet_type', 3, BinaryPacketFieldType.ENUM, {1: 'LK', 2: 'CM', 5: 'LR', 6: 'ST'}),
+            ('addr', 16, BinaryPacketFieldType.UINTLE),
+            ('id', 8, BinaryPacketFieldType.UINTLE),
+            ('seq_num', 5, BinaryPacketFieldType.UINTLE),
+        ])
+        self.frame_sync = '0110111000100110100001'
+        self.freqs = [452_925_000, 452_950_000, 457_925_000, 457_950_000]
+        self.afsk_mark_freq = 1200
+        self.afsk_space_freq = 2200
+
+    def encode(self, data, bit_sync_bits=100, debug=False):
+        bitstr = ''
+        bitstr += '0' * (bit_sync_bits // 2) + '0'
+        bitstr += self.frame_sync
+        data = self.encoder_decoder.encode(data, debug)
+        bitstr += data * 3
+        if debug:
+            print(f"[DEBUG] DPU data portion: {data}")
         return bitstr
 
 
