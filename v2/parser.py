@@ -215,7 +215,7 @@ class HOTParser(GenericParser):
             ('chaining_bits', 2, BinaryPacketFieldType.UINTLE),
             ('message_type', 3, BinaryPacketFieldType.ENUM, {0: 'normal'}), # note: 0b111 ('arm') not used in HOT
             ('unit_addr', 17, BinaryPacketFieldType.UINTLE),
-            ('command', 8, BinaryPacketFieldType.UINTLE),
+            ('command', 8, BinaryPacketFieldType.ENUM, {0x55: 'SRQ', 0xAA: 'EMR'}),
             ('bch_checkbits', 33, BinaryPacketFieldType.BCH, ('1110011011010111000010110011111011', None)),
             ('dummy', 1, BinaryPacketFieldType.UINTLE),
         ])
@@ -243,9 +243,46 @@ class DPUParser(GenericParser):
             ('origin', 3, BinaryPacketFieldType.ENUM, {3: 'LD', 4: 'RM'}),
             ('repeat_code', 2, BinaryPacketFieldType.ENUM, {0: 'DI', 1: 'RP', 2: 'RO'}),
             ('packet_type', 3, BinaryPacketFieldType.ENUM, {1: 'LK', 2: 'CM', 5: 'LR', 6: 'ST'}),
-            ('addr', 16, BinaryPacketFieldType.UINTLE),
-            ('id', 8, BinaryPacketFieldType.UINTLE),
+            ('addr', 16, BinaryPacketFieldType.UINTBE),
+            ('id', 8, BinaryPacketFieldType.UINTBE),
             ('seq_num', 5, BinaryPacketFieldType.UINTLE),
+            ('nrm', 3, BinaryPacketFieldType.UINTLE),
+            ('rmid', 3, BinaryPacketFieldType.UINTLE),
+            ('unknown2', 5, BinaryPacketFieldType.UINTLE),
+            ('power_type', 5, BinaryPacketFieldType.ENUM, {
+                0: 'dynamic_brake',
+                9: 'bstup',
+                10: 'idle',
+                11: 'N1',
+                12: 'N2',
+                13: 'N3',
+                14: 'N4',
+                15: 'N5',
+                16: 'N6',
+                17: 'N7',
+                18: 'N8',
+                0x1a: 'set_out',
+                0x18: 'idlmd'}),
+            ('unknown3', 2, BinaryPacketFieldType.UINTLE),
+            ('bvin', 1, BinaryPacketFieldType.UINTLE),
+            # [8]
+            ('unknown8', 8, BinaryPacketFieldType.UINTLE),
+            # [9]
+            ('unknown9', 8, BinaryPacketFieldType.UINTLE),
+            # [0xa]
+            ('unknown_0xa', 8, BinaryPacketFieldType.UINTLE),
+            # [0xb]
+            ('unknown_0xb', 8, BinaryPacketFieldType.UINTLE),
+            # [0xc]
+            ('unknown_0xc', 8, BinaryPacketFieldType.UINTLE),
+            # [0xd]
+            ('unknown_0xd', 8, BinaryPacketFieldType.UINTLE),
+            # [0xe]
+            ('cmd_dynamic_brake?', 8, BinaryPacketFieldType.UINTLE),
+            # [0xf]
+            ('unknown_0xf', 8, BinaryPacketFieldType.UINTLE),
+            # [0x10]
+            ('st_power_val_unknown?', 8, BinaryPacketFieldType.UINTLE),
         ])
         self.frame_sync = '0110111000100110100001'
         self.freqs = [452_925_000, 452_950_000, 457_925_000, 457_950_000]

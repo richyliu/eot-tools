@@ -10,7 +10,7 @@ import os
 
 from parser import EOTParser, HOTParser, DPUParser
 from afsk import AFSKEncoder
-from fm import FMModulator
+from fm import FMModulator, SignalDetector
 
 
 def open_recording_as_raw(filename):
@@ -137,7 +137,7 @@ def streaming(argv):
     print(f'Streaming mode: sample rate={fs} Hz, center frequency={center_freq/1e6:.3f} MHz, dtype={dtype}, scale={scale}')
 
     chunk_size = 65536 # in bytes
-    skip = 200
+    skip = 100
 
     skip_counter = 0
     parsed = 0
@@ -157,9 +157,11 @@ def streaming(argv):
     target_freqs = []
     for decoder in decoders:
         target_freqs.extend(decoder.freqs)
+    target_freqs.sort()
     target_freqs = np.array(target_freqs, dtype=np.float32)
+    signal_detector = SignalDetector(target_freqs - center_freq, chunk_size // dtype().itemsize // 2, fs=fs, deviation=2500)
 
-    last_signal_vals = [np.array([], dtype=np.float32)] * len(target_freqs)
+    last_signal_vals = [[]] * len(target_freqs)
 
     t = 0
 
@@ -167,7 +169,7 @@ def streaming(argv):
 
     while True:
         raw = os.read(fd, chunk_size)
-        if not raw:
+        if not raw or len(raw) < chunk_size:
             break  # EOF
 
         data = np.frombuffer(raw, dtype=dtype)
@@ -179,7 +181,7 @@ def streaming(argv):
         data = data.astype(np.float32) * scale  # scale to float32
         section = data[0::2] + 1j * data[1::2]
 
-        snrs = fm_modulator.calc_snr(section, fs, target_freqs - center_freq, deviation=7500)
+        snrs = signal_detector.calc_snr(section)
         for j in range(len(snrs)):
             for k in range(len(decoders)):
                 if target_freqs[j] in decoders[k].freqs:
@@ -188,29 +190,29 @@ def streaming(argv):
             else:
                 raise ValueError(f'No decoder found for frequency {target_freqs[j]} Hz')
 
-            if snrs[j] > snr_threshold and len(last_signal_vals[j]) < int(max_last_signal_length * fs):
-                # print(f'SNR: {snrs[j]:.1f}dB, freq={target_freqs[j]/1e3:.1f}kHz, decoder={decoder}')
-                last_signal_vals[j] = np.concatenate((last_signal_vals[j], section))
+            if snrs[j] > snr_threshold and len(last_signal_vals[j]) < int(max_last_signal_length * fs) // len(section):
+                last_signal_vals[j].append(section)
             elif len(last_signal_vals[j]) > 0:
-                if len(last_signal_vals[j]) >= int(min_signal_length * fs):
+                if len(last_signal_vals[j]) >= int(min_signal_length * fs) // len(section):
                     # end of a signal segment
                     print(
                         f't={t:.2f}s',
-                        f'length={len(last_signal_vals[j])/fs:.2f}s',
+                        f'length={len(last_signal_vals[j])*len(section)/fs:.2f}s',
                         f'freq={target_freqs[j]/1e3:.1f}kHz',
                         f'decoder={decoder}'
                     )
                     sys.stdout.flush()
                     try:
                         afsk = AFSKEncoder(sample_rate=44100, baud_rate=1200, mark_freq=decoder.afsk_mark_freq, space_freq=decoder.afsk_space_freq)
-                        audio_signal_demod = fm_modulator.demodulate(last_signal_vals[j], shift=target_freqs[j] - center_freq)
+                        vals = np.concatenate(last_signal_vals[j])
+                        audio_signal_demod = fm_modulator.demodulate(vals, shift=target_freqs[j] - center_freq)
                         decoded_bits = afsk.decode(audio_signal_demod, frame_sync=decoder.frame_sync)
                         print(f'Decoded bits: {decoded_bits}')
                         data = decoder.decode(decoded_bits)
                         decoder.pretty_print(data)
                     except Exception as ex:
                         print('[WARNING] Decoding error:', ex)
-                last_signal_vals[j] = np.array([], dtype=np.float32)
+                last_signal_vals[j] = []
 
         skip_counter += 1
         if skip_counter < skip:
@@ -222,9 +224,9 @@ def streaming(argv):
         timestr = datetime.now().strftime('%H:%M:%S.%f')[:-4]  # HH:MM:SS.ss
         now = time.perf_counter()
         rate = parsed / (now - start_time)
-        print(f'{timestr} ({rate/1e6:.2f} MSPS) |{power_plot}| min={min_power:.1f}, max={max_power:.1f}, snrs=', end='')
+        print(f'{timestr} ({rate/1e6:5.2f} MSPS) |{power_plot}| min={min_power:.1f}, max={max_power:.1f}, snrs=', end='')
         for j in range(len(snrs)):
-            print(f'{snrs[j]:5.1f}dB', end=',')
+            print(f'{snrs[j]:5.1f}', end=',')
         print()
         sys.stdout.flush()
 

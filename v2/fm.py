@@ -6,6 +6,7 @@ FM encoder and decoder
 import numpy as np
 from scipy import signal
 
+from line_profiler import profile
 
 class FMModulator:
     """FM modulator for audio signals"""
@@ -54,36 +55,45 @@ class FMModulator:
         sig = np.clip(sig, -1, 1)
         return sig
 
-    def calc_snr(self, x, fs, target_freqs=[], deviation=None):
-        if deviation is None:
-            deviation = self.deviation
 
+class SignalDetector:
+    def __init__(self, target_freqs, N, fs=6000000, deviation=2500):
+        self.target_freqs = target_freqs
+        self.fs = fs
+        self.N = N
+        self.deviation = deviation
+
+        freqs = np.fft.fftfreq(N, 1/self.fs)
+        mask_signals = []
+        self.mask_noise = np.ones(N, dtype=bool)
+        for f in self.target_freqs:
+            mask = (freqs >= f - self.deviation/2) & (freqs <= f + self.deviation/2)
+            mask_signals.append(mask)
+            self.mask_noise &= ~mask  # keep noise mask as the complement of all signal masks
+
+        self.mask_signals_matrix = np.array(mask_signals, dtype=bool).astype(np.float32)
+        # Normalize the mask signals matrix
+        self.mask_signals_matrix /= np.sum(self.mask_signals_matrix, axis=1, keepdims=True)
+
+        self.mask_noise = self.mask_noise.astype(np.float32) / np.sum(self.mask_noise)
+
+
+    @profile
+    def calc_snr(self, x):
         # make sure signal is complex
         assert np.iscomplexobj(x), "Input signal must be complex"
 
         # Compute FFT
-        N = len(x)
-        X = np.fft.fftshift(np.fft.fft(x))
-        freqs = np.fft.fftshift(np.fft.fftfreq(N, 1/fs))
+        assert len(x) == self.N, f"Input signal length must be {self.N}, got {len(x)}"
+        # no need to do fftshift because the order doesn't matter for SNR calculation
+        X = np.fft.fft(x)
 
-        psd = np.abs(X)**2 / N  # power spectrum estimate
+        psd = np.abs(X)**2 / self.N  # power spectrum estimate
 
-        # separate signal band for each freq (relative to center)
-        snrs = []
-        for f in target_freqs:
-            # Define signal band
-            # mask_signal = np.abs(freqs) < (self.deviation/2)
-            # mask_noise = ~mask_signal
-            mask_signal = (freqs >= f - deviation/2) & (freqs <= f + deviation/2)
-            mask_noise = ~mask_signal
-
-            signal_power = np.mean(psd[mask_signal])
-            noise_power = np.mean(psd[mask_noise])
-
-            snr = 10 * np.log10(signal_power / noise_power)
-            snrs.append(snr)
-        return np.array(snrs)
-
+        signals = psd @ self.mask_signals_matrix.T
+        noise = psd @ self.mask_noise
+        snrs = 10 * np.log10(signals / noise)
+        return snrs
 
 def test():
     from afsk import AFSKEncoder
