@@ -6,7 +6,12 @@ FM encoder and decoder
 import numpy as np
 from scipy import signal
 
-from line_profiler import profile
+try:
+    from line_profiler import profile
+except ImportError:
+    def profile(func):
+        """Dummy profile decorator if line_profiler is not installed"""
+        return func
 
 class FMModulator:
     """FM modulator for audio signals"""

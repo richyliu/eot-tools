@@ -8,6 +8,13 @@ import numpy as np
 from scipy.io import wavfile
 import os
 
+try:
+    from line_profiler import profile
+except ImportError:
+    def profile(func):
+        """Dummy profile decorator if line_profiler is not installed"""
+        return func
+
 from parser import EOTParser, HOTParser, DPUParser
 from afsk import AFSKEncoder
 from fm import FMModulator, SignalDetector
@@ -20,7 +27,7 @@ def open_recording_as_raw(filename):
     _, _, _, center_freq_raw, sample_rate_raw, num_format = filename.split('_')
     center_freq = int(center_freq_raw)
     fs = int(sample_rate_raw)
-    
+
     type_ = None
     scale = 1.0
     if num_format.startswith('i8c'):
@@ -34,16 +41,16 @@ def open_recording_as_raw(filename):
         scale = 1.0
     else:
         raise Exception(f'Unknown recording number format {num_format} in file "{filename}"')
-    
+
     # Read raw interleaved IQ data
     raw_data = np.memmap(filename, dtype=type_, mode='r')
-    
+
     print(f'File: {filename}, sample count: {len(raw_data)} ({len(raw_data)/fs/2:.2f}) seconds)')
 
     return center_freq, fs, scale, raw_data
 
 
-def power_spectrogram_one_line(sig, sample_rate, num_buckets=50, power_symbols=' .,:ilwW'):
+def power_spectrogram_one_line(sig, sample_rate, num_buckets=50, power_symbols=' .:+oO#@'):
     X = np.fft.fftshift(np.fft.fft(sig))
     freqs = np.fft.fftshift(np.fft.fftfreq(len(sig), 1 / sample_rate))
     psd = np.abs(X)**2 / len(sig)  # power spectrum estimate
@@ -64,7 +71,7 @@ def power_spectrogram_one_line(sig, sample_rate, num_buckets=50, power_symbols='
 
 def fm_demod(fname):
     center_freq, sample_rate, scale, raw_data = open_recording_as_raw(fname)
-    
+
     fm_modulator = FMModulator(sample_rate=sample_rate, audio_sample_rate=44100, deviation=2500)
     afsk = AFSKEncoder(sample_rate=44100, baud_rate=1200, mark_freq=1200, space_freq=1800)
 
@@ -106,6 +113,7 @@ def fm_demod(fname):
         print(f'{time:.1f} |{power_plot}| min={min_power:.1f}, max={max_power:.1f}')
 
 
+@profile
 def streaming(argv):
     if len(argv) > 1:
         center_freq = int(argv[1])
@@ -136,10 +144,11 @@ def streaming(argv):
 
     print(f'Streaming mode: sample rate={fs} Hz, center frequency={center_freq/1e6:.3f} MHz, dtype={dtype}, scale={scale}')
 
-    chunk_size = 65536 # in bytes
-    skip = 100
+    chunk_size = 1 << 15 # in bytes
+    chunk_size //= dtype().itemsize
+    print_every = 800
 
-    skip_counter = 0
+    counter = 0
     parsed = 0
     fd = sys.stdin.buffer.fileno()
 
@@ -169,19 +178,39 @@ def streaming(argv):
 
     while True:
         raw = os.read(fd, chunk_size)
-        if not raw or len(raw) < chunk_size:
+        if not raw:
             break  # EOF
+        if len(raw) < chunk_size:
+            print(f'[WARNING] read({fd}, {chunk_size}) only returned length {len(raw)}')
+            continue
 
         data = np.frombuffer(raw, dtype=dtype)
         parsed += len(data) // 2  # each sample is a pair of values (I and Q)
 
         t += len(data) // 2 / fs  # update time in seconds
 
-        # Convert to complex64
-        data = data.astype(np.float32) * scale  # scale to float32
-        section = data[0::2] + 1j * data[1::2]
+        section = (data[0::2].astype(np.float32) + 1j * data[1::2].astype(np.float32)) * scale
+
+        counter += 1
+        if counter == print_every:
+            counter = 0
+
+            power_plot, max_power, min_power = power_spectrogram_one_line(section, fs, num_buckets=60)
+
+            timestr = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-4]
+            now = time.perf_counter()
+            rate = parsed / (now - start_time)
+            print(f'{timestr} t={t:5.1f} ({rate/1e6:4.1f} MSPS) |{power_plot}| min={min_power:.1f}, max={max_power:.1f}, snrs=', end='')
+            for j in range(len(snrs)):
+                print(f'{snrs[j]:5.1f}', end=',')
+            print()
+            sys.stdout.flush()
 
         snrs = signal_detector.calc_snr(section)
+        if np.all(snrs < snr_threshold):
+            # No signals detected, skip this section
+            continue
+
         for j in range(len(snrs)):
             for k in range(len(decoders)):
                 if target_freqs[j] in decoders[k].freqs:
@@ -213,22 +242,6 @@ def streaming(argv):
                     except Exception as ex:
                         print('[WARNING] Decoding error:', ex)
                 last_signal_vals[j] = []
-
-        skip_counter += 1
-        if skip_counter < skip:
-            continue
-        skip_counter = 0
-
-        power_plot, max_power, min_power = power_spectrogram_one_line(section, fs, num_buckets=100)
-
-        timestr = datetime.now().strftime('%H:%M:%S.%f')[:-4]  # HH:MM:SS.ss
-        now = time.perf_counter()
-        rate = parsed / (now - start_time)
-        print(f'{timestr} ({rate/1e6:5.2f} MSPS) |{power_plot}| min={min_power:.1f}, max={max_power:.1f}, snrs=', end='')
-        for j in range(len(snrs)):
-            print(f'{snrs[j]:5.1f}', end=',')
-        print()
-        sys.stdout.flush()
 
 
 if __name__ == "__main__":
