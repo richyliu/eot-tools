@@ -64,7 +64,7 @@ def power_spectrogram_one_line(sig, sample_rate, num_buckets=100, power_symbols=
     max_power = np.max(psd_buckets)
     min_power = np.min(psd_buckets)
     psd_buckets_scaled = (psd_buckets - min_power) / (max_power - min_power) * (len(power_symbols) - 1)
-    power_plot = ''.join(power_symbols[int(p)] for p in psd_buckets_scaled)
+    power_plot = ''.join(power_symbols[int(p)] if not np.isnan(p) else '!' for p in psd_buckets_scaled)
 
     return power_plot, max_power, min_power
 
@@ -102,7 +102,8 @@ def main(argv):
 
     chunk_size = 1 << 15 # in bytes
     chunk_size //= dtype().itemsize
-    print_every = int(.5 * fs / (chunk_size // dtype().itemsize // 2))
+    print_interval_secs = 0.5
+    print_every = int(print_interval_secs * fs / (chunk_size // dtype().itemsize // 2))
     print(f'{print_every=}')
 
     counter = 0
@@ -158,7 +159,7 @@ def main(argv):
             rate = parsed / (now - start_time)
             print(f'{timestr} t={t:5.1f} ({rate/1e6:4.1f} MSPS) |{power_plot}| min={min_power:.1f}, max={max_power:.1f}, snrs=', end='')
             for j in range(len(snrs)):
-                print(f'{snrs[j]:5.1f}', end=',')
+                print(f'{int(snrs[j])}', end=',')
             # print('  ', end='')
             # for i in range(len(last_signal_vals)):
             #     print(f'{len(last_signal_vals[i])}', end=',')

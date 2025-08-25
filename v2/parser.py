@@ -77,7 +77,7 @@ class BinaryPacketEncoderDecoder:
                     bin_value = format(value, f'0{size}b')
                 elif type_ == BinaryPacketFieldType.ENUM:
                     if value not in addl.values():
-                        print(f'[WARNING] Value {value} for {name} not in enum mapping, using default 0', file=sys.stderr)
+                        raise ValueError(f"Invalid enum value for {name}: {value}")
                     inv_map = {v: k for k, v in addl.items()}
                     bin_value = format(inv_map[value], f'0{size}b')[::-1]
 
@@ -223,6 +223,19 @@ class HOTParser(GenericParser):
         self.freqs = [452_937_500]
         self.afsk_mark_freq = 1200
         self.afsk_space_freq = 1800
+
+    def encode_fields(self, unit_addr, command):
+        assert 0 <= unit_addr < (1 << 17), "unit_addr out of range"
+        assert command in ['SRQ', 'EMR'], "command must be 'SRQ' or 'EMR'"
+        data = {
+            'chaining_bits': 0b11,
+            'message_type': 'normal',
+            'unit_addr': unit_addr,
+            'command': command,
+            # 'bch_checkbits': 0,  # will be calculated automatically
+            'dummy': 1
+        }
+        return self.encode(data)
 
     def encode(self, data, bit_sync_bits=456, debug=False):
         bitstr = ''

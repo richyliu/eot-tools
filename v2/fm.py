@@ -21,7 +21,7 @@ class FMModulator:
         self.audio_sample_rate = audio_sample_rate
         self.deviation = deviation
 
-    def modulate(self, audio_signal):
+    def modulate(self, audio_signal, shift=0):
         """Apply FM modulation to audio signal"""
         # Upsample audio to RF sample rate
         upsampled = signal.resample(audio_signal, len(audio_signal) * self.sample_rate // self.audio_sample_rate)
@@ -33,6 +33,9 @@ class FMModulator:
         # FM modulation
         phase = np.cumsum(2 * np.pi * self.deviation * emphasized / self.sample_rate)
         fm_signal = np.exp(1j * phase)
+
+        # shift the signal to center frequency
+        fm_signal = fm_signal * np.exp(-2j * np.pi * shift * np.arange(len(fm_signal)) / self.sample_rate)
 
         return fm_signal
 
@@ -78,7 +81,7 @@ class SignalDetector:
 
         self.mask_signals_matrix = np.array(mask_signals, dtype=bool).astype(np.float32)
         # Normalize the mask signals matrix
-        self.mask_signals_matrix /= np.sum(self.mask_signals_matrix, axis=1, keepdims=True)
+        self.mask_signals_matrix /= (np.sum(self.mask_signals_matrix, axis=1, keepdims=True) + 1e-10)  # avoid division by zero
 
         self.mask_noise = self.mask_noise.astype(np.float32) / np.sum(self.mask_noise)
 
@@ -97,7 +100,7 @@ class SignalDetector:
 
         signals = psd @ self.mask_signals_matrix.T
         noise = psd @ self.mask_noise
-        snrs = 10 * np.log10(signals / noise)
+        snrs = 10 * np.log10(signals / noise + 1e-10)  # avoid log(0)
         return snrs
 
 def test():
@@ -108,9 +111,8 @@ def test():
     audio_signal = afsk.encode(test_bits)
 
     fm_modulator = FMModulator(sample_rate=2000000, audio_sample_rate=44100, deviation=2500)
-    fm_signal = fm_modulator.modulate(audio_signal)
     # shift by 25kHz to simulate RF transmission
-    fm_signal = fm_signal * np.exp(-2j * np.pi * 25000 * np.arange(len(fm_signal)) / 2000000)
+    fm_signal = fm_modulator.modulate(audio_signal, shift=25000)
 
     audio_signal_demod = fm_modulator.demodulate(fm_signal, shift=-25000)
 
