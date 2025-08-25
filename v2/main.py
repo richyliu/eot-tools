@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -u
 
 from datetime import datetime
 import time
@@ -50,7 +50,7 @@ def open_recording_as_raw(filename):
     return center_freq, fs, scale, raw_data
 
 
-def power_spectrogram_one_line(sig, sample_rate, num_buckets=50, power_symbols=' .:+oO#@'):
+def power_spectrogram_one_line(sig, sample_rate, num_buckets=100, power_symbols=' .:+oO#@'):
     X = np.fft.fftshift(np.fft.fft(sig))
     freqs = np.fft.fftshift(np.fft.fftfreq(len(sig), 1 / sample_rate))
     psd = np.abs(X)**2 / len(sig)  # power spectrum estimate
@@ -69,52 +69,8 @@ def power_spectrogram_one_line(sig, sample_rate, num_buckets=50, power_symbols='
     return power_plot, max_power, min_power
 
 
-def fm_demod(fname):
-    center_freq, sample_rate, scale, raw_data = open_recording_as_raw(fname)
-
-    fm_modulator = FMModulator(sample_rate=sample_rate, audio_sample_rate=44100, deviation=2500)
-    afsk = AFSKEncoder(sample_rate=44100, baud_rate=1200, mark_freq=1200, space_freq=1800)
-
-    import matplotlib.pyplot as plt
-    # also plot fft
-
-    start = int(6_000_000 * 4.0)  # 100 ms
-    duration = int(6_000_000 * 0.4)  # 100 ms
-    data_section = raw_data[start*2:(start + duration)*2]  # 2 bytes per sample (I and Q)
-    data_section = data_section.astype(np.float32) * scale  # scale to float32
-    section = data_section[::2] + 1j * data_section[1::2]  # convert interleaved IQ to complex signal
-
-    X = np.fft.fftshift(np.fft.fft(section))
-    freqs = np.fft.fftshift(np.fft.fftfreq(len(section), 1 / sample_rate))
-    psd = np.abs(X)**2 / len(section)  # power spectrum estimate
-
-    plt.figure(figsize=(15, 6))
-    plt.plot((freqs + center_freq) / 1e6, 10 * np.log10(psd), label='Power Spectrum')
-    plt.title(f'Power Spectrum of Signal Section @ {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
-    plt.xlabel('Frequency (MHz)')
-    plt.ylabel('Power (dB)')
-    plt.grid()
-    plt.legend()
-    plt.savefig('power_spectrum.png')
-    plt.close()
-
-
-    duration = int(6_000_000 * 0.4)
-    for i in range(0, len(raw_data), duration * 2):
-        if i + duration * 2 > len(raw_data):
-            break
-        data_section = raw_data[i:i + duration*2]
-        data_section = data_section.astype(np.float32) * scale  # scale to float32
-        section = data_section[::2] + 1j * data_section[1::2]  # convert interleaved IQ to complex signal
-
-        power_plot, max_power, min_power = power_spectrogram_one_line(section, sample_rate)
-
-        time = i / (sample_rate * 2)  # convert to seconds
-        print(f'{time:.1f} |{power_plot}| min={min_power:.1f}, max={max_power:.1f}')
-
-
 @profile
-def streaming(argv):
+def main(argv):
     if len(argv) > 1:
         center_freq = int(argv[1])
     else:
@@ -146,7 +102,8 @@ def streaming(argv):
 
     chunk_size = 1 << 15 # in bytes
     chunk_size //= dtype().itemsize
-    print_every = 800
+    print_every = int(.5 * fs / (chunk_size // dtype().itemsize // 2))
+    print(f'{print_every=}')
 
     counter = 0
     parsed = 0
@@ -158,10 +115,9 @@ def streaming(argv):
     dpu = DPUParser()
 
     decoders = [eot, hot, dpu]
-    snr_threshold = 10  # dB
+    snr_threshold = 16  # dB
     max_last_signal_length = 1.0 # in seconds
     min_signal_length = 0.1  # in seconds
-    window_size = int(fs * 0.02)  # 20 ms window size
 
     target_freqs = []
     for decoder in decoders:
@@ -170,7 +126,7 @@ def streaming(argv):
     target_freqs = np.array(target_freqs, dtype=np.float32)
     signal_detector = SignalDetector(target_freqs - center_freq, chunk_size // dtype().itemsize // 2, fs=fs, deviation=2500)
 
-    last_signal_vals = [[]] * len(target_freqs)
+    last_signal_vals = [[] for _ in range(len(target_freqs))]
 
     t = 0
 
@@ -203,13 +159,25 @@ def streaming(argv):
             print(f'{timestr} t={t:5.1f} ({rate/1e6:4.1f} MSPS) |{power_plot}| min={min_power:.1f}, max={max_power:.1f}, snrs=', end='')
             for j in range(len(snrs)):
                 print(f'{snrs[j]:5.1f}', end=',')
+            # print('  ', end='')
+            # for i in range(len(last_signal_vals)):
+            #     print(f'{len(last_signal_vals[i])}', end=',')
             print()
             sys.stdout.flush()
 
         snrs = signal_detector.calc_snr(section)
         if np.all(snrs < snr_threshold):
-            # No signals detected, skip this section
-            continue
+            for i in range(len(last_signal_vals)):
+                if len(last_signal_vals[i]) > 0:
+                    break
+            else:
+                # No signals detected, skip this section
+                continue
+
+        # print(f't={t:.3f} len(last_signal_vals[..])=', end='')
+        # for i in range(len(last_signal_vals)):
+        #     print(f'{len(last_signal_vals[i])}', end=',')
+        # print()
 
         for j in range(len(snrs)):
             for k in range(len(decoders)):
@@ -219,18 +187,22 @@ def streaming(argv):
             else:
                 raise ValueError(f'No decoder found for frequency {target_freqs[j]} Hz')
 
-            if snrs[j] > snr_threshold and len(last_signal_vals[j]) < int(max_last_signal_length * fs) // len(section):
-                last_signal_vals[j].append(section)
+            if snrs[j] > snr_threshold:
+                if len(last_signal_vals[j]) == 0:
+                    print(f't={t:.3f} got signal freq={target_freqs[j]/1e3:.1f}kHz snr={snrs[j]}')
+                if len(last_signal_vals[j]) < int(max_last_signal_length * fs) // len(section):
+                    last_signal_vals[j].append(section)
+                else:
+                    print(f't={t:.3f} signal overflow freq={target_freqs[j]/1e3:.1f}kHz snr={snrs[j]}')
             elif len(last_signal_vals[j]) > 0:
                 if len(last_signal_vals[j]) >= int(min_signal_length * fs) // len(section):
                     # end of a signal segment
                     print(
-                        f't={t:.2f}s',
+                        f't={t:.3f}s',
                         f'length={len(last_signal_vals[j])*len(section)/fs:.2f}s',
                         f'freq={target_freqs[j]/1e3:.1f}kHz',
                         f'decoder={decoder}'
                     )
-                    sys.stdout.flush()
                     try:
                         afsk = AFSKEncoder(sample_rate=44100, baud_rate=1200, mark_freq=decoder.afsk_mark_freq, space_freq=decoder.afsk_space_freq)
                         vals = np.concatenate(last_signal_vals[j])
@@ -241,10 +213,10 @@ def streaming(argv):
                         decoder.pretty_print(data)
                     except Exception as ex:
                         print('[WARNING] Decoding error:', ex)
+                else:
+                    print(f't={t:.3f} signal too short freq={target_freqs[j]/1e3:.1f}kHz length={len(last_signal_vals[j])}')
                 last_signal_vals[j] = []
 
 
 if __name__ == "__main__":
-    streaming(sys.argv)
-    # main(sys.argv[1])
-    # fm_demod(sys.argv[1])
+    main(sys.argv)
