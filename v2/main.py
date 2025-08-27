@@ -116,7 +116,7 @@ def main(argv):
     dpu = DPUParser()
 
     decoders = [eot, hot, dpu]
-    snr_threshold = 16  # dB
+    snr_threshold = 100  # dB (initialized dynamically)
     max_last_signal_length = 1.0 # in seconds
     min_signal_length = 0.1  # in seconds
 
@@ -125,9 +125,10 @@ def main(argv):
         target_freqs.extend(decoder.freqs)
     target_freqs.sort()
     target_freqs = np.array(target_freqs, dtype=np.float32)
-    signal_detector = SignalDetector(target_freqs - center_freq, chunk_size // dtype().itemsize // 2, fs=fs, deviation=2500)
+    signal_detector = SignalDetector(target_freqs - center_freq, chunk_size // dtype().itemsize // 2, fs=fs, deviation=1500)
 
     last_signal_vals = [[] for _ in range(len(target_freqs))]
+    snr_ema = np.ones(len(target_freqs), dtype=np.float32) * -100.0
 
     t = 0
 
@@ -157,17 +158,38 @@ def main(argv):
             timestr = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-4]
             now = time.perf_counter()
             rate = parsed / (now - start_time)
-            print(f'{timestr} t={t:5.1f} ({rate/1e6:4.1f} MSPS) |{power_plot}| min={min_power:.1f}, max={max_power:.1f}, snrs=', end='')
+            print(f'{timestr} t={t:5.1f} ({rate/1e6:4.1f} MSPS) |{power_plot}| {min_power:.1f}->{max_power:.1f}dB snrs=', end='')
             for j in range(len(snrs)):
                 print(f'{int(snrs[j])}', end=',')
             # print('  ', end='')
-            # for i in range(len(last_signal_vals)):
-            #     print(f'{len(last_signal_vals[i])}', end=',')
+            # for i in range(len(snr_ema)):
+            #     print(f'{int(snr_ema[i])}', end=',')
             print()
             sys.stdout.flush()
 
         snrs = signal_detector.calc_snr(section)
-        if np.all(snrs < snr_threshold):
+
+        # update exponential moving average of snrs
+        alpha = 1/20
+        snr_ema = alpha * snrs + (1 - alpha) * snr_ema
+
+        # initialize snr_threshold dynamically
+        if parsed > int(fs * 1) and snr_threshold > 90:
+            snr_threshold = np.max(snr_ema) + 15
+            print(f'Initialized SNR threshold to {snr_threshold:.1f} dB based on max SNR {np.max(snr_ema):.1f} dB')
+
+        # DEBUG snrs
+
+        # print(f'l={parsed//(len(data)//2)} snrs=', end='')
+        # for j in range(len(snrs)):
+        #     print(f'{snrs[j]:.1f}', end=',')
+        # print(f'snr_ema=', end='')
+        # for j in range(len(snrs)):
+        #     print(f'{snr_ema[j]:.1f}', end=',')
+        # print()
+        # continue
+
+        if np.all(snr_ema < snr_threshold):
             for i in range(len(last_signal_vals)):
                 if len(last_signal_vals[i]) > 0:
                     break
@@ -180,7 +202,7 @@ def main(argv):
         #     print(f'{len(last_signal_vals[i])}', end=',')
         # print()
 
-        for j in range(len(snrs)):
+        for j in range(len(snr_ema)):
             for k in range(len(decoders)):
                 if target_freqs[j] in decoders[k].freqs:
                     decoder = decoders[k]
@@ -188,13 +210,13 @@ def main(argv):
             else:
                 raise ValueError(f'No decoder found for frequency {target_freqs[j]} Hz')
 
-            if snrs[j] > snr_threshold:
+            if snr_ema[j] > snr_threshold:
                 if len(last_signal_vals[j]) == 0:
-                    print(f't={t:.3f} got signal freq={target_freqs[j]/1e3:.1f}kHz snr={snrs[j]}')
+                    print(f't={t:.3f} (l={parsed//(len(data)//2)}) got signal freq={target_freqs[j]/1e3:.1f}kHz snr={snr_ema[j]}')
                 if len(last_signal_vals[j]) < int(max_last_signal_length * fs) // len(section):
                     last_signal_vals[j].append(section)
                 else:
-                    print(f't={t:.3f} signal overflow freq={target_freqs[j]/1e3:.1f}kHz snr={snrs[j]}')
+                    print(f't={t:.3f} (l={parsed//(len(data)//2)}) signal overflow freq={target_freqs[j]/1e3:.1f}kHz snr={snr_ema[j]}')
             elif len(last_signal_vals[j]) > 0:
                 if len(last_signal_vals[j]) >= int(min_signal_length * fs) // len(section):
                     # end of a signal segment
@@ -210,12 +232,16 @@ def main(argv):
                         audio_signal_demod = fm_modulator.demodulate(vals, shift=target_freqs[j] - center_freq)
                         decoded_bits = afsk.decode(audio_signal_demod, frame_sync=decoder.frame_sync)
                         print(f'Decoded bits: {decoded_bits}')
-                        data = decoder.decode(decoded_bits)
-                        decoder.pretty_print(data)
+                        buf = decoded_bits
+                        while decoder.frame_sync in buf:
+                            print(f'Attempting to decode frame at index {len(decoded_bits) - len(buf)}')
+                            data = decoder.decode(buf)
+                            decoder.pretty_print(data)
+                            buf = buf[buf.index(decoder.frame_sync) + len(decoder.frame_sync):]
                     except Exception as ex:
                         print('[WARNING] Decoding error:', ex)
                 else:
-                    print(f't={t:.3f} signal too short freq={target_freqs[j]/1e3:.1f}kHz length={len(last_signal_vals[j])}')
+                    print(f't={t:.3f} (l={parsed//(len(data)//2)}) signal too short freq={target_freqs[j]/1e3:.1f}kHz length={len(last_signal_vals[j])} snr={snrs[j]}')
                 last_signal_vals[j] = []
 
 
