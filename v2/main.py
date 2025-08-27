@@ -100,6 +100,12 @@ def main(argv):
 
     print(f'Streaming mode: sample rate={fs} Hz, center frequency={center_freq/1e6:.3f} MHz, dtype={dtype}, scale={scale}')
 
+    signal_on_snr_threshold = 10  # dB relative to baseline
+    signal_off_snr_threshold = 5  # dB relative to baseline
+    signal_hysteresis_duration = 0.01 # seconds
+    max_last_signal_length = 1.0 # in seconds
+    snr_ema_alpha = 1/5
+
     chunk_size = 1 << 15 # in bytes
     chunk_size //= dtype().itemsize
     print_interval_secs = 0.5
@@ -116,19 +122,28 @@ def main(argv):
     dpu = DPUParser()
 
     decoders = [eot, hot, dpu]
-    snr_threshold = 100  # dB (initialized dynamically)
-    max_last_signal_length = 1.0 # in seconds
-    min_signal_length = 0.1  # in seconds
+    decoder_per_freq = []
 
     target_freqs = []
     for decoder in decoders:
         target_freqs.extend(decoder.freqs)
     target_freqs.sort()
+    for f in target_freqs:
+        for decoder in decoders:
+            if f in decoder.freqs:
+                decoder_per_freq.append(decoder)
+                break
+        else:
+            raise Exception(f'No decoder found for frequency {f}')
     target_freqs = np.array(target_freqs, dtype=np.float32)
     signal_detector = SignalDetector(target_freqs - center_freq, chunk_size // dtype().itemsize // 2, fs=fs, deviation=1500)
 
     last_signal_vals = [[] for _ in range(len(target_freqs))]
     snr_ema = np.ones(len(target_freqs), dtype=np.float32) * -100.0
+    signal_snr_baseline = 100.0  # dB
+    snrs_above_on_threshold = np.zeros(len(target_freqs), dtype=np.int32)
+    snrs_below_off_threshold = np.zeros(len(target_freqs), dtype=np.int32)
+    squelch_open = [False] * len(target_freqs)
 
     t = 0
 
@@ -143,9 +158,11 @@ def main(argv):
             continue
 
         data = np.frombuffer(raw, dtype=dtype)
-        parsed += len(data) // 2  # each sample is a pair of values (I and Q)
+        num_chunk_samples = len(data) // 2  # each sample is a pair of values (I and Q)
+        parsed += num_chunk_samples
 
-        t += len(data) // 2 / fs  # update time in seconds
+        chunk_time = len(data) // 2 / fs  # update time in seconds
+        t += chunk_time
 
         section = (data[0::2].astype(np.float32) + 1j * data[1::2].astype(np.float32)) * scale
 
@@ -153,34 +170,30 @@ def main(argv):
         if counter == print_every:
             counter = 0
 
-            power_plot, max_power, min_power = power_spectrogram_one_line(section, fs, num_buckets=60)
+            power_plot, max_power, min_power = power_spectrogram_one_line(section, fs, num_buckets=30)
 
             timestr = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-4]
             now = time.perf_counter()
             rate = parsed / (now - start_time)
-            print(f'{timestr} t={t:5.1f} ({rate/1e6:4.1f} MSPS) |{power_plot}| {min_power:.1f}->{max_power:.1f}dB snrs=', end='')
-            for j in range(len(snrs)):
-                print(f'{int(snrs[j])}', end=',')
-            # print('  ', end='')
-            # for i in range(len(snr_ema)):
-            #     print(f'{int(snr_ema[i])}', end=',')
+            print(f'{timestr} t={t:5.1f} ({rate/1e6:4.1f} MSPS) |{power_plot}| {min_power:.1f}->{max_power:.1f}dB snrs_ema=', end='')
+            for i in range(len(snr_ema)):
+                print(f'{int(snr_ema[i])}', end=',')
             print()
             sys.stdout.flush()
 
         snrs = signal_detector.calc_snr(section)
 
         # update exponential moving average of snrs
-        alpha = 1/20
-        snr_ema = alpha * snrs + (1 - alpha) * snr_ema
+        snr_ema = snr_ema_alpha * snrs + (1 - snr_ema_alpha) * snr_ema
 
         # initialize snr_threshold dynamically
-        if parsed > int(fs * 1) and snr_threshold > 90:
-            snr_threshold = np.max(snr_ema) + 15
-            print(f'Initialized SNR threshold to {snr_threshold:.1f} dB based on max SNR {np.max(snr_ema):.1f} dB')
+        if parsed > int(fs * 1) and signal_snr_baseline > 90:
+            signal_snr_baseline = np.median(snr_ema)
+            print(f'Baseline SNR established at {signal_snr_baseline:.1f} dB (ON SNR: {signal_snr_baseline + signal_on_snr_threshold:.1f} dB, OFF SNR: {signal_snr_baseline + signal_off_snr_threshold:.1f} dB)')
 
         # DEBUG snrs
 
-        # print(f'l={parsed//(len(data)//2)} snrs=', end='')
+        # print(f'l={parsed//num_chunk_samples} snrs=', end='')
         # for j in range(len(snrs)):
         #     print(f'{snrs[j]:.1f}', end=',')
         # print(f'snr_ema=', end='')
@@ -189,47 +202,44 @@ def main(argv):
         # print()
         # continue
 
-        if np.all(snr_ema < snr_threshold):
-            for i in range(len(last_signal_vals)):
-                if len(last_signal_vals[i]) > 0:
-                    break
+        for i in range(len(snr_ema)):
+            if snr_ema[i] > signal_snr_baseline + signal_on_snr_threshold:
+                snrs_above_on_threshold[i] += 1
             else:
-                # No signals detected, skip this section
-                continue
-
-        # print(f't={t:.3f} len(last_signal_vals[..])=', end='')
-        # for i in range(len(last_signal_vals)):
-        #     print(f'{len(last_signal_vals[i])}', end=',')
-        # print()
-
-        for j in range(len(snr_ema)):
-            for k in range(len(decoders)):
-                if target_freqs[j] in decoders[k].freqs:
-                    decoder = decoders[k]
-                    break
+                snrs_above_on_threshold[i] = 0
+            if snr_ema[i] < signal_snr_baseline + signal_off_snr_threshold:
+                snrs_below_off_threshold[i] += 1
             else:
-                raise ValueError(f'No decoder found for frequency {target_freqs[j]} Hz')
+                snrs_below_off_threshold[i] = 0
 
-            if snr_ema[j] > snr_threshold:
-                if len(last_signal_vals[j]) == 0:
-                    print(f't={t:.3f} (l={parsed//(len(data)//2)}) got signal freq={target_freqs[j]/1e3:.1f}kHz snr={snr_ema[j]}')
-                if len(last_signal_vals[j]) < int(max_last_signal_length * fs) // len(section):
-                    last_signal_vals[j].append(section)
+            decoder = decoder_per_freq[i]
+
+            if not squelch_open[i]:
+                if snrs_above_on_threshold[i] >= signal_hysteresis_duration * fs / num_chunk_samples:
+                    # open the squelch (start recording signal)
+                    squelch_open[i] = True
+                    print(f't={t:.3f} (l={parsed//(len(data)//2)}) got signal freq={target_freqs[i]/1e3:.1f}kHz snr_ema={snr_ema[i]:.1f} decoder={decoder}')
+                    last_signal_vals[i].append(section)
+            else:
+                # recording signal as long as it is not too long
+                if len(last_signal_vals[i]) < int(max_last_signal_length * fs) // len(section):
+                    last_signal_vals[i].append(section)
                 else:
-                    print(f't={t:.3f} (l={parsed//(len(data)//2)}) signal overflow freq={target_freqs[j]/1e3:.1f}kHz snr={snr_ema[j]}')
-            elif len(last_signal_vals[j]) > 0:
-                if len(last_signal_vals[j]) >= int(min_signal_length * fs) // len(section):
-                    # end of a signal segment
+                    print(f't={t:.3f} (l={parsed//(len(data)//2)}) signal overflow freq={target_freqs[i]/1e3:.1f}kHz snr_ema={snr_ema[i]:.1f} decoder={decoder}')
+
+                if snrs_below_off_threshold[i] >= signal_hysteresis_duration * fs / num_chunk_samples:
+                    # close the squelch (stop recording signal)
                     print(
                         f't={t:.3f}s',
-                        f'length={len(last_signal_vals[j])*len(section)/fs:.2f}s',
-                        f'freq={target_freqs[j]/1e3:.1f}kHz',
+                        f'length={len(last_signal_vals[i])*len(section)/fs:.2f}s',
+                        f'freq={target_freqs[i]/1e3:.1f}kHz',
                         f'decoder={decoder}'
                     )
+
                     try:
                         afsk = AFSKEncoder(sample_rate=44100, baud_rate=1200, mark_freq=decoder.afsk_mark_freq, space_freq=decoder.afsk_space_freq)
-                        vals = np.concatenate(last_signal_vals[j])
-                        audio_signal_demod = fm_modulator.demodulate(vals, shift=target_freqs[j] - center_freq)
+                        vals = np.concatenate(last_signal_vals[i])
+                        audio_signal_demod = fm_modulator.demodulate(vals, shift=target_freqs[i] - center_freq)
                         decoded_bits = afsk.decode(audio_signal_demod, frame_sync=decoder.frame_sync)
                         print(f'Decoded bits: {decoded_bits}')
                         buf = decoded_bits
@@ -238,12 +248,13 @@ def main(argv):
                             data = decoder.decode(buf)
                             decoder.pretty_print(data)
                             buf = buf[buf.index(decoder.frame_sync) + len(decoder.frame_sync):]
+                        else:
+                            print('No complete frame sync found in the decoded bits')
                     except Exception as ex:
                         print('[WARNING] Decoding error:', ex)
-                else:
-                    print(f't={t:.3f} (l={parsed//(len(data)//2)}) signal too short freq={target_freqs[j]/1e3:.1f}kHz length={len(last_signal_vals[j])} snr={snrs[j]}')
-                last_signal_vals[j] = []
 
+                    last_signal_vals[i] = []
+                    squelch_open[i] = False
 
 if __name__ == "__main__":
     main(sys.argv)

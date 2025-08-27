@@ -182,7 +182,7 @@ class EOTParser(GenericParser):
             ('message_type', 3, BinaryPacketFieldType.ENUM, {0: 'normal', 0b111: 'arm'}),
             ('unit_addr', 17, BinaryPacketFieldType.UINTLE),
             ('pressure', 7, BinaryPacketFieldType.UINTLE),
-            ('batt_charge', 7, BinaryPacketFieldType.UINTLE),
+            ('batt_charge_used', 7, BinaryPacketFieldType.UINTLE),
             ('discretionary', 1, BinaryPacketFieldType.UINTLE),
             ('valve_circuit_operational', 1, BinaryPacketFieldType.UINTLE),
             ('confirmation_indicator', 1, BinaryPacketFieldType.UINTLE),
