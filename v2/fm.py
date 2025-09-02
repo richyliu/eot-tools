@@ -21,7 +21,7 @@ class FMModulator:
         self.audio_sample_rate = audio_sample_rate
         self.deviation = deviation
 
-    def modulate(self, audio_signal, shift=0):
+    def modulate(self, audio_signal, shift=0, start_phase=0):
         """Apply FM modulation to audio signal"""
         # Upsample audio to RF sample rate
         upsampled = signal.resample(audio_signal, len(audio_signal) * self.sample_rate // self.audio_sample_rate)
@@ -31,13 +31,15 @@ class FMModulator:
         emphasized = signal.lfilter(b, a, upsampled)
 
         # FM modulation
-        phase = np.cumsum(2 * np.pi * self.deviation * emphasized / self.sample_rate)
+        phase = np.cumsum(2 * np.pi * self.deviation * emphasized / self.sample_rate) + start_phase
         fm_signal = np.exp(1j * phase)
 
         # shift the signal to center frequency
         fm_signal = fm_signal * np.exp(-2j * np.pi * shift * np.arange(len(fm_signal)) / self.sample_rate)
 
-        return fm_signal
+        end_phase = phase[-1] if len(phase) > 0 else start_phase
+
+        return fm_signal, end_phase
 
     def demodulate(self, fm_signal, shift=0):
         """Demodulate FM signal back to audio"""
@@ -112,7 +114,7 @@ def test():
 
     fm_modulator = FMModulator(sample_rate=2000000, audio_sample_rate=44100, deviation=2500)
     # shift by 25kHz to simulate RF transmission
-    fm_signal = fm_modulator.modulate(audio_signal, shift=25000)
+    fm_signal, _ = fm_modulator.modulate(audio_signal, shift=25000)
 
     audio_signal_demod = fm_modulator.demodulate(fm_signal, shift=-25000)
 

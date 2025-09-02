@@ -60,7 +60,7 @@ def iq_stream_out(signal, dtype=np.int16, scale=1/2**15, noise_level=0.01):
     iq_signal[0::2] = np.real(signal) / scale
     iq_signal[1::2] = np.imag(signal) / scale
     sys.stdout.buffer.write(iq_signal.tobytes())
-    # print(f'[ATTACK] sent {len(signal)} complex samples ({len(iq_signal) * iq_signal.itemsize / 1e3:.2f} kB)', file=sys.stderr)
+    # print(f'[SEND] sent {len(signal)} complex samples ({len(iq_signal) * iq_signal.itemsize / 1e3:.2f} kB)', file=sys.stderr)
 
 def main(argv):
     args = parse_arguments()
@@ -81,17 +81,17 @@ def main(argv):
     else:
         raise Exception(f'Unknown number format "{num_format}"')
 
-    print(f'[ATTACK] sample rate={fs} Hz, center frequency={center_freq/1e6:.3f} MHz, dtype={dtype}, scale={scale}', file=sys.stderr)
+    print(f'[SEND] sample rate={fs} Hz, center frequency={center_freq/1e6:.3f} MHz, dtype={dtype}, scale={scale}', file=sys.stderr)
 
     hot = HOTParser()
     afsk = AFSKEncoder(sample_rate=44100, baud_rate=1200, mark_freq=hot.afsk_mark_freq, space_freq=hot.afsk_space_freq)
     fm_modulator = FMModulator(sample_rate=fs, audio_sample_rate=44100)
 
     bitstr = hot.encode_fields(unit_addr=args.unit_addr, command=args.command)
-    print('[ATTACK]', hot.decode(bitstr), file=sys.stderr)
+    print('[SEND]', hot.decode(bitstr), file=sys.stderr)
     audio_signal = afsk.encode(bitstr)
-    fm_signal = fm_modulator.modulate(audio_signal, shift=center_freq - hot.freqs[0])
-    print(f'[ATTACK] Generated FM signal with {len(fm_signal)} complex samples', file=sys.stderr)
+    fm_signal, _ = fm_modulator.modulate(audio_signal, shift=center_freq - hot.freqs[0])
+    print(f'[SEND] Generated FM signal with {len(fm_signal)} complex samples', file=sys.stderr)
 
     # pad with silence
     silence = np.zeros(int(fs * 0.5), dtype=np.complex64)

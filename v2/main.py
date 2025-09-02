@@ -86,6 +86,11 @@ def main(argv):
     else:
         num_format = 'i16c'
 
+    if len(argv) > 4:
+        settle_time = float(argv[4])
+    else:
+        settle_time = 0.1
+
     if num_format.startswith('i8c'):
         dtype = np.int8
         scale = 1/2**7
@@ -106,9 +111,10 @@ def main(argv):
     max_last_signal_length = 1.0 # in seconds
     snr_ema_alpha = 1/5
 
-    chunk_size = 1 << 15 # in bytes
+    # chunk_size = 1 << 15 # in bytes
+    chunk_size = 1 << 12 # in bytes
     chunk_size //= dtype().itemsize
-    print_interval_secs = 0.5
+    print_interval_secs = 3
     print_every = int(print_interval_secs * fs / (chunk_size // dtype().itemsize // 2))
     print(f'{print_every=}')
 
@@ -126,7 +132,10 @@ def main(argv):
 
     target_freqs = []
     for decoder in decoders:
-        target_freqs.extend(decoder.freqs)
+        for freq in decoder.freqs:
+            # check if it is within the sampled bandwidth
+            if center_freq - fs/2 < freq < center_freq + fs/2:
+                target_freqs.append(freq)
     target_freqs.sort()
     for f in target_freqs:
         for decoder in decoders:
@@ -187,8 +196,8 @@ def main(argv):
         snr_ema = snr_ema_alpha * snrs + (1 - snr_ema_alpha) * snr_ema
 
         # initialize snr_threshold dynamically
-        if parsed > int(fs * 1) and signal_snr_baseline > 90:
-            signal_snr_baseline = np.median(snr_ema)
+        if parsed > int(fs * settle_time) and signal_snr_baseline > 90:
+            signal_snr_baseline = np.max(snr_ema)
             print(f'Baseline SNR established at {signal_snr_baseline:.1f} dB (ON SNR: {signal_snr_baseline + signal_on_snr_threshold:.1f} dB, OFF SNR: {signal_snr_baseline + signal_off_snr_threshold:.1f} dB)')
 
         # DEBUG snrs
@@ -226,6 +235,7 @@ def main(argv):
                     last_signal_vals[i].append(section)
                 else:
                     print(f't={t:.3f} (l={parsed//(len(data)//2)}) signal overflow freq={target_freqs[i]/1e3:.1f}kHz snr_ema={snr_ema[i]:.1f} decoder={decoder}')
+                    snrs_below_off_threshold[i] = signal_hysteresis_duration * fs / num_chunk_samples + 1  # force closing squelch
 
                 if snrs_below_off_threshold[i] >= signal_hysteresis_duration * fs / num_chunk_samples:
                     # close the squelch (stop recording signal)
@@ -244,9 +254,12 @@ def main(argv):
                         print(f'Decoded bits: {decoded_bits}')
                         buf = decoded_bits
                         while decoder.frame_sync in buf:
-                            print(f'Attempting to decode frame at index {len(decoded_bits) - len(buf)}')
-                            data = decoder.decode(buf)
-                            decoder.pretty_print(data)
+                            print(f'Attempting to decode frame starting at index {len(decoded_bits) - len(buf)}')
+                            packet_data = decoder.decode(buf)
+                            if packet_data is not None:
+                                timestr = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-4]
+                                print(f'{timestr} valid packet freq={target_freqs[i]/1e3:.1f}kHz snr_ema={snr_ema[i]:.1f} decoder={decoder}')
+                            decoder.pretty_print(packet_data)
                             buf = buf[buf.index(decoder.frame_sync) + len(decoder.frame_sync):]
                         else:
                             print('No complete frame sync found in the decoded bits')

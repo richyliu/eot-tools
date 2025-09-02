@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+
+hackrf_transfer -f 457900000 -s 2000000 -l 0 -r - 2>/dev/null | ./main.py 457900000 2000000 i8c
