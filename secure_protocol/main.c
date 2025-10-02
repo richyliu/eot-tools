@@ -19,6 +19,8 @@
 #define HOT_ADV_INTERVAL_MS 1000
 #define PAIRING_TIMEOUT 6000
 #define PACKET_SEND_DELAY_MS_PER_BYTE 20
+#define HOT_RETRANSMIT_INTERVAL_MS 2000
+#define EOT_WAIT_ADV_TIMEOUT_MS 30000
 
 #define ECC_CURVE uECC_secp256r1()
 // all sizes are in bytes
@@ -116,6 +118,7 @@ typedef struct {
   nonce_t eot_nonce;
   nonce_t hot_nonce;
   pin_t pin;
+  uint32_t ctr; // current message counter for replay protection (only used once paired)
 } conn_info_t;
 
 typedef struct timespec timer_t;
@@ -365,8 +368,10 @@ void eot_run(communicator_t *comm) {
   uint8_t msg[MAX_MSG_LEN];
   msg_type_t msg_type;
   eot_status_t status;
+  timer_t adv_start;
   timer_t pairing_start;
   timer_t now;
+  timer_now(&adv_start);
   timer_now(&pairing_start);
   timer_now(&now);
 
@@ -379,7 +384,16 @@ void eot_run(communicator_t *comm) {
         printf("EOT_IDLE: waiting for user to push ARM button\n");
         wait_for_arm_button_press();
         printf("Button pressed, waiting for HOT advertisement...\n");
+        timer_now(&adv_start);
         state = EOT_WAIT_ADV;
+        break;
+      case EOT_WAIT_ADV:
+        timer_now(&now);
+        if (timer_diff_ms(&now, &adv_start) >= EOT_WAIT_ADV_TIMEOUT_MS) {
+          printf("EOT: Waiting for HOT timed out. Returning to idle state.\n");
+          state = EOT_IDLE;
+          memset(&conn, 0, sizeof(conn));
+        }
         break;
       case EOT_KEY_EX_1:
       case EOT_KEY_EX_2:
@@ -392,6 +406,19 @@ void eot_run(communicator_t *comm) {
         break;
       case EOT_PAIRED:
         // TODO: periodically send status updates
+        // check for user input (non-blocking) to disconnect
+        {
+          int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+          fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+          char buf[16];
+          if (read(STDIN_FILENO, buf, sizeof(buf)) > 0) {
+            printf("Pressed enter (ARM button), disconnecting and searching for new HOT...\n");
+            timer_now(&adv_start);
+            state = EOT_WAIT_ADV;
+            memset(&conn, 0, sizeof(conn));
+          }
+          fcntl(STDIN_FILENO, F_SETFL, flags);
+        }
         break;
       default:
         break;
@@ -457,12 +484,24 @@ void eot_run(communicator_t *comm) {
           printf("EOT: received HOT nonce and verified commitment. PIN is %05u\n", conn.pin);
           printf("Please enter the PIN in the HOT and press the ARM button once confirmed.\n");
           wait_for_arm_button_press();
-          printf("Pairing successful!\n");
+          printf("Pairing successful! Press enter at any time to disconnect and return to waiting for advertisement.\n");
           state = EOT_PAIRED;
         }
         break;
       case EOT_PAIRED:
         if (recved_session_id == conn.session_id) {
+          // check message counter for replay protection
+          if (recv_len < sizeof(conn.ctr)) {
+            printf("EOT: received message too short for counter, ignoring.\n");
+            break;
+          }
+          uint32_t recv_ctr;
+          memcpy(&recv_ctr, msg, sizeof(recv_ctr));
+          if (recv_ctr <= conn.ctr) {
+            printf("EOT: received message with old counter (%u <= %u), ignoring.\n", recv_ctr, conn.ctr);
+            break;
+          }
+          conn.ctr = recv_ctr;
           if (msg_type == HOT_MSG_STATUS) {
             get_eot_status(&status);
             comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_STATUS, (uint8_t*)&status, sizeof(status));
@@ -494,9 +533,11 @@ void hot_run(communicator_t *comm) {
   uint8_t msg[MAX_MSG_LEN];
   msg_type_t msg_type;
   timer_t last_adv_time;
+  timer_t last_transmit_time;
   timer_t pairing_start;
   timer_t now;
   timer_now(&last_adv_time);
+  timer_now(&last_transmit_time);
   timer_now(&pairing_start);
   timer_now(&now);
   uint32_t input_pin = 0;
@@ -538,15 +579,23 @@ void hot_run(communicator_t *comm) {
       case HOT_WAIT_FOR_PIN:
         // In a real implementation, we would wait for user input here
         printf("HOT: waiting for user to input PIN...\n");
-        printf("Enter PIN: ");
-        scanf("%u", &input_pin);
-        getchar(); // consume newline
-        if (input_pin == conn.pin) {
-          printf("HOT: PIN correct! Pairing successful. Press the ARM button on the EOT to confirm.\n");
-          state = HOT_PAIRED;
-        } else {
-          printf("HOT: Incorrect PIN. Pairing failed.\n");
+        for (int i = 0; i < 3; i++) {
+          printf("Enter PIN (attempt %d of 3): ", i + 1);
+          scanf("%u", &input_pin);
+          getchar(); // consume newline
+          printf("You entered: %05u\n", input_pin);
+          if (input_pin == conn.pin) {
+            printf("PIN correct! Pairing successful. Press the ARM button on the EOT to confirm.\n");
+            state = HOT_PAIRED;
+            break;
+          } else {
+            printf("Incorrect PIN. Try again.\n");
+          }
+        }
+        if (state != HOT_PAIRED) {
+          printf("Failed to enter correct PIN. Returning to idle state.\n");
           state = HOT_IDLE;
+          memset(&conn, 0, sizeof(conn));
         }
         break;
       case HOT_PAIRED:
@@ -558,24 +607,43 @@ void hot_run(communicator_t *comm) {
         choice = 0;
         scanf("%d", &choice);
         getchar(); // consume newline
+
+        conn.ctr++; // increment message counter
         if (choice == 1) {
-          comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_STATUS, NULL, 0);
+          // also send ctr to avoid replay attacks
+          comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_STATUS, (uint8_t*)&conn.ctr, sizeof(conn.ctr));
           printf("HOT: sent status update request\n");
           state = HOT_WAIT_FOR_STATUS;
         } else if (choice == 2) {
-          comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_EMERGENCY, NULL, 0);
+          // also send ctr to avoid replay attacks
+          comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_EMERGENCY, (uint8_t*)&conn.ctr, sizeof(conn.ctr));
           printf("HOT: sent emergency brake request\n");
           state = HOT_WAIT_FOR_EMERGENCY;
         } else if (choice == 3) {
+          // also send ctr to avoid replay attacks
           printf("HOT: Disconnecting...\n");
-          comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_DISCONNECT, NULL, 0);
+          comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_DISCONNECT, (uint8_t*)&conn.ctr, sizeof(conn.ctr));
           state = HOT_IDLE;
           memset(&conn, 0, sizeof(conn));
         } else {
           printf("Invalid choice.\n");
         }
+        timer_now(&last_transmit_time);
+        break;
+      case HOT_WAIT_FOR_STATUS:
       case HOT_WAIT_FOR_EMERGENCY:
-        // TODO: retransmit emergency brake request if no response
+        // retransmit request if no response
+        timer_now(&now);
+        if (timer_diff_ms(&now, &last_transmit_time) >= HOT_RETRANSMIT_INTERVAL_MS) {
+          if (state == HOT_WAIT_FOR_STATUS) {
+            comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_STATUS, (uint8_t*)&conn.ctr, sizeof(conn.ctr));
+            printf("HOT: retransmitted status update request\n");
+          } else if (state == HOT_WAIT_FOR_EMERGENCY) {
+            comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_EMERGENCY, (uint8_t*)&conn.ctr, sizeof(conn.ctr));
+            printf("HOT: retransmitted emergency brake request\n");
+          }
+          last_transmit_time = now;
+        }
         break;
       default:
         break;
