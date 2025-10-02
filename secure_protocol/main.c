@@ -9,13 +9,15 @@
 #include <time.h>
 
 #include "micro-ecc/uECC.h"
+#include "sha256/sha256.h"
 
 
 #define EOT_TO_HOT_SOCKET_PATH "/tmp/eot_to_hot.sock"
 #define HOT_TO_EOT_SOCKET_PATH "/tmp/hot_to_eot.sock"
 
 #define DEFAULT_TIMEOUT_MS 300
-#define HOT_STATE_ADV_INTERVAL_MS 1000
+#define HOT_ADV_INTERVAL_MS 1000
+#define PAIRING_TIMEOUT 5000
 
 #define ECC_CURVE uECC_secp256r1()
 // all sizes are in bytes
@@ -25,6 +27,7 @@
 #define PRIVKEY_SIZE CURVE_SIZE
 
 #define NONCE_SIZE 16
+#define SHA256_SIZE 32
 #define COMMITMENT_SIZE 32 // SHA-256 output size
 
 #define MAX_MSG_LEN 256
@@ -37,14 +40,50 @@ typedef union {
     // these are messages sent from EOT to HOT
     EOT_MSG_PUBKEY = 0,
     EOT_MSG_NONCE,
+    EOT_MSG_STATUS,    // status update response
+    EOT_MSG_EMERGENCY, // emergency brake confirmation
   } eot;
   enum {
     // these are messages sent from HOT to EOT
     HOT_MSG_ADV = 0,
     HOT_MSG_PUBKEY_AND_COMMIT,
     HOT_MSG_NONCE,
+    HOT_MSG_STATUS,    // status update request
+    HOT_MSG_EMERGENCY, // emergency brake request
+    HOT_MSG_DISCONNECT
   } hot;
 } msg_type_t;
+
+enum eot_state {
+  EOT_IDLE = 0,    // initial state
+  EOT_WAIT_ADV,    // waiting for advertisement from HOT
+  EOT_KEY_EX_1,    // sent our pubkey, waiting for theirs
+  EOT_KEY_EX_2,    // received their pubkey and commitment, sending our nonce and waiting for theirs
+  EOT_PAIRED,
+  EOT_EMERGENCY_BRAKE
+};
+
+enum hot_state {
+  HOT_IDLE = 0,     // initial state
+  HOT_ADV,          // sending periodic advertisements
+  HOT_KEY_EX_1,     // received their pubkey, sending our pubkey and commitment, waiting for their nonce
+  HOT_WAIT_FOR_PIN, // received their nonce, waiting for user to input PIN
+  HOT_PAIRED,
+  HOT_WAIT_FOR_STATUS,
+  HOT_WAIT_FOR_EMERGENCY, // wait for confirmation of emergency brake
+};
+
+typedef struct {
+  uint8_t batt_cond;                 // 2 bits
+  uint16_t pressure;                 // 7 bits
+  uint16_t batt_charge_used;         // 7 bits
+  uint8_t valve_circuit_operational; // 1 bit
+  uint8_t confirmation_indicator;    // 1 bit
+  uint8_t turbine_status;            // 1 bit
+  uint8_t motion_detection;          // 1 bit
+  uint8_t marker_light_battery_weak; // 1 bit
+  uint8_t marker_light_status;       // 1 bit
+} eot_status_t;
 
 typedef struct {
   uint8_t private[PRIVKEY_SIZE];
@@ -79,22 +118,18 @@ typedef struct {
   pin_t pin;
 } conn_info_t;
 
-enum eot_state {
-  EOT_STATE_IDLE = 0,   // initial state
-  EOT_STATE_WAIT_ADV,   // waiting for advertisement from HOT
-  EOT_STATE_KEY_EX_1,   // sent our pubkey, waiting for theirs
-  EOT_STATE_KEY_EX_2,   // received their pubkey and commitment, sending our nonce and waiting for theirs
-  EOT_STATE_PIN_DISPLAY // received their nonce, displaying PIN and waiting for user to confirm
-};
 
-enum hot_state {
-  HOT_STATE_IDLE = 0,    // initial state
-  HOT_STATE_ADV,         // sending periodic advertisements
-  HOT_STATE_KEY_EX_1,    // received their pubkey, sending our pubkey and commitment, waiting for their nonce
-  HOT_STATE_KEY_EX_2,    // received their nonce, sending our nonce
-  HOT_STATE_WAIT_FOR_PIN // sent our nonce, waiting for user to input PIN
-};
+void sha256(const uint8_t *data, size_t len, uint8_t *hash_out) {
+  /* printf("SHA256 input (len=%zu): ", len); for (size_t i = 0; i < len; i++) printf("%02x", data[i]); printf("\n"); */
 
+  struct sha256_buff buff;
+  sha256_init(&buff);
+  sha256_update(&buff, data, len);
+  sha256_finalize(&buff);
+  sha256_read(&buff, hash_out);
+
+  /* printf("SHA256 output: "); for (size_t i = 0; i < SHA256_SIZE; i++) printf("%02x", hash_out[i]); printf("\n"); */
+}
 
 /**
  * Generate a new ECC keypair using the secp256r1 curve.
@@ -113,12 +148,7 @@ int generate_keypair(keypair_t *keypair) {
  * @param commitment Pointer to the commitment_t struct to hold the resulting commitment.
  */
 void create_commitment(const nonce_t *nonce, commitment_t *commitment) {
-  // Simple SHA-256 hash for commitment
-  // In a real implementation, use a proper cryptographic library
-  // Here we just simulate it with a placeholder
-  for (size_t i = 0; i < COMMITMENT_SIZE; i++) {
-    commitment->data[i] = nonce->data[i % NONCE_SIZE] ^ (uint8_t)i;
-  }
+  sha256(nonce->data, NONCE_SIZE, commitment->data);
 }
 
 /**
@@ -159,6 +189,44 @@ void generate_nonce(nonce_t *nonce) {
     exit(EXIT_FAILURE);
   }
   close(fd);
+}
+
+session_id_t generate_session_id() {
+  session_id_t session_id;
+  int fd = open("/dev/urandom", O_RDONLY);
+  if (fd < 0) {
+    perror("open /dev/urandom");
+    exit(EXIT_FAILURE);
+  }
+  if (read(fd, &session_id, sizeof(session_id)) != sizeof(session_id)) {
+    perror("read /dev/urandom");
+    close(fd);
+    exit(EXIT_FAILURE);
+  }
+  close(fd);
+  return session_id;
+}
+
+/**
+ * Computes a 5-digit PIN from the two public keys and nonces
+ * @param eot_pubkey EOT's public key
+ * @param hot_pubkey HOT's public key
+ * @param eot_nonce EOT's nonce
+ * @param hot_nonce HOT's nonce
+ * @return 5-digit PIN
+ */
+pin_t compute_pin(const uint8_t *eot_pubkey, const uint8_t *hot_pubkey,
+                  const nonce_t *eot_nonce, const nonce_t *hot_nonce) {
+  uint8_t data[PUBKEY_SIZE * 2 + NONCE_SIZE * 2];
+  memcpy(data, eot_pubkey, PUBKEY_SIZE);
+  memcpy(data + PUBKEY_SIZE, hot_pubkey, PUBKEY_SIZE);
+  memcpy(data + PUBKEY_SIZE * 2, eot_nonce->data, NONCE_SIZE);
+  memcpy(data + PUBKEY_SIZE * 2 + NONCE_SIZE, hot_nonce->data, NONCE_SIZE);
+  uint8_t hash[SHA256_SIZE];
+  sha256(data, sizeof(data), hash);
+  // take first 4 bytes of hash, convert to integer, mod 100000 to get 5-digit PIN
+  uint32_t pin = (*(uint32_t*)hash) % 100000;
+  return pin;
 }
 
 
@@ -217,37 +285,116 @@ ssize_t comm_recv(communicator_t* comm,
   return payload_len;
 }
 
+/**
+ * Get current EOT data to send. Not implemented, returns dummy data.
+ */
+void get_eot_status(eot_status_t *status) {
+  // In a real implementation, gather actual data from sensors
+  status->batt_cond = 2;                 // Good
+  status->pressure = 100;                 // Example pressure
+  status->batt_charge_used = 50;          // Example charge used
+  status->valve_circuit_operational = 1;  // Operational
+  status->confirmation_indicator = 0;     // Off
+  status->turbine_status = 1;             // Spinning
+  status->motion_detection = 0;           // No motion
+  status->marker_light_battery_weak = 0;  // Battery good
+  status->marker_light_status = 1;        // On
+}
+
+void display_eot_status(eot_status_t *status) {
+  time_t now;
+  char buf[26];
+  time(&now);
+  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
+
+  printf("[%s] EOT Status:\n", buf);
+  printf("  Battery Condition: %u\n", status->batt_cond);
+  printf("  Pressure: %u\n", status->pressure);
+  printf("  Battery Charge Used: %u\n", status->batt_charge_used);
+  printf("  Valve Circuit Operational: %u\n", status->valve_circuit_operational);
+  printf("  Confirmation Indicator: %u\n", status->confirmation_indicator);
+  printf("  Turbine Status: %u\n", status->turbine_status);
+  printf("  Motion Detection: %u\n", status->motion_detection);
+  printf("  Marker Light Battery Weak: %u\n", status->marker_light_battery_weak);
+  printf("  Marker Light Status: %u\n", status->marker_light_status);
+  printf("\n");
+}
+
+void eot_emergency_brake() {
+  // In a real implementation, trigger the emergency brake mechanism
+  printf("EOT: Emergency brake activated!\n");
+}
+
+/**
+ * Simulate waiting for the user to press the ARM button.
+ * Uses STDIN for simulation.
+ */
+void wait_for_arm_button_press() {
+  // clear any existing input
+  int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+  fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+  char buf[16];
+  while (read(STDIN_FILENO, buf, sizeof(buf)) > 0);
+  fcntl(STDIN_FILENO, F_SETFL, flags);
+  
+  printf("Press enter to simulate ARM button press...\n");
+  getchar();
+}
+
 void eot_run(communicator_t *comm) {
   // EOT main loop
 
   conn_info_t conn; // current connection info
   memset(&conn, 0, sizeof(conn));
-  enum eot_state state = EOT_STATE_IDLE;
+  session_id_t recved_session_id = 0;
+  enum eot_state state = EOT_IDLE;
   uint8_t msg[MAX_MSG_LEN];
   msg_type_t msg_type;
+  eot_status_t status;
+  time_t pairing_start = 0;
+  time_t now = 0;
 
   while (1) {
-    size_t recv_len = comm_recv(comm, &conn.session_id, &msg_type, msg, sizeof(msg));
+    size_t recv_len = comm_recv(comm, &recved_session_id, &msg_type, msg, sizeof(msg));
     if (recv_len == -1) {
       // timeout from recv, no message received
       switch (state) {
-      case EOT_STATE_IDLE:
-        printf("EOT_STATE_IDLE: waiting for user to push ARM button\n");
-        printf("Press enter to simulate button press...\n");
-        getchar();
+      case EOT_IDLE:
+        printf("EOT_IDLE: waiting for user to push ARM button\n");
+        wait_for_arm_button_press();
         printf("Button pressed, waiting for HOT advertisement...\n");
-        state = EOT_STATE_WAIT_ADV;
+        state = EOT_WAIT_ADV;
         break;
-        // TODO: handle timeout
+      case EOT_KEY_EX_1:
+      case EOT_KEY_EX_2:
+        time(&now);
+        if (difftime(now, pairing_start) * 1000 >= PAIRING_TIMEOUT) {
+          printf("EOT: Pairing timed out. Returning to idle state.\n");
+          state = EOT_IDLE;
+          memset(&conn, 0, sizeof(conn));
+        }
+        break;
+      case EOT_PAIRED:
+        // TODO: periodically send status updates
+        break;
       default:
         break;
       }
     } else {
-      /* printf("received msg type=%d len=%zu state=%d\n", msg_type.hot, recv_len, state); */
+      /* printf("received msg type=%d session_id=%u len=%zu state=%d\n", msg_type.hot, recved_session_id, recv_len, state); */
       switch (state) {
-      case EOT_STATE_WAIT_ADV:
+      case EOT_WAIT_ADV:
         if (msg_type.hot == HOT_MSG_ADV) {
           // received advertisement from HOT
+          printf("EOT: received advertisement from HOT, initiating connection...\n");
+
+          time(&pairing_start);
+          // reset connection info from previous session
+          memset(&conn, 0, sizeof(conn));
+
+          printf("EOT: establishing connection with ID %u\n", recved_session_id);
+          conn.session_id = recved_session_id;
+
           // generate our keypair
           if (!generate_keypair(&conn.eot_keys)) {
             fprintf(stderr, "Failed to generate EOT keypair\n");
@@ -258,9 +405,60 @@ void eot_run(communicator_t *comm) {
           compress_pubkey(conn.eot_keys.public, compressed_pubkey);
           comm_send(comm, conn.session_id, (msg_type_t){.eot = EOT_MSG_PUBKEY}, compressed_pubkey, sizeof(compressed_pubkey));
           printf("EOT: sent public key to HOT, waiting for their pubkey and commitment...\n");
-          state = EOT_STATE_KEY_EX_1;
+          state = EOT_KEY_EX_1;
         }
         break;
+      case EOT_KEY_EX_1:
+        if (msg_type.hot == HOT_MSG_PUBKEY_AND_COMMIT && recved_session_id == conn.session_id && recv_len == COMPRESSED_PUBKEY_SIZE + COMMITMENT_SIZE) {
+          // received HOT's public key and commitment
+          uint8_t hot_compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
+          memcpy(hot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
+          memcpy(conn.hot_commitment.data, msg + COMPRESSED_PUBKEY_SIZE, COMMITMENT_SIZE);
+          decompress_pubkey(hot_compressed_pubkey, conn.hot_keys.public);
+          printf("EOT: received HOT pubkey and commitment, generating nonce...\n");
+          // generate our nonce
+          generate_nonce(&conn.eot_nonce);
+          // send our nonce to HOT
+          comm_send(comm, conn.session_id, (msg_type_t){.eot = EOT_MSG_NONCE}, conn.eot_nonce.data, sizeof(conn.eot_nonce.data));
+          printf("EOT: sent nonce to HOT, waiting for their nonce...\n");
+          state = EOT_KEY_EX_2;
+        }
+        break;
+      case EOT_KEY_EX_2:
+        if (msg_type.hot == HOT_MSG_NONCE && recved_session_id == conn.session_id && recv_len == NONCE_SIZE) {
+          // received HOT's nonce
+          memcpy(conn.hot_nonce.data, msg, NONCE_SIZE);
+          // verify HOT's commitment
+          if (!verify_commitment(&conn.hot_nonce, &conn.hot_commitment)) {
+            fprintf(stderr, "EOT: Commitment verification failed! Aborting.\n");
+            state = EOT_IDLE;
+            break;
+          }
+          // compute PIN
+          conn.pin = compute_pin(conn.eot_keys.public, conn.hot_keys.public, &conn.eot_nonce, &conn.hot_nonce);
+          printf("EOT: received HOT nonce and verified commitment. PIN is %05u\n", conn.pin);
+          printf("Please enter the PIN in the HOT and press the ARM button once confirmed.\n");
+          wait_for_arm_button_press();
+          printf("Pairing successful! Press the ARM button on the EOT to confirm.\n");
+          state = EOT_PAIRED;
+        }
+        break;
+      case EOT_PAIRED:
+        if (recved_session_id == conn.session_id) {
+          if (msg_type.hot == HOT_MSG_STATUS) {
+            get_eot_status(&status);
+            comm_send(comm, conn.session_id, (msg_type_t){.eot = EOT_MSG_STATUS}, (uint8_t*)&status, sizeof(status));
+            printf("EOT: sent status update to HOT.\n");
+          } else if (msg_type.hot == HOT_MSG_EMERGENCY) {
+            eot_emergency_brake();
+            comm_send(comm, conn.session_id, (msg_type_t){.eot = EOT_MSG_EMERGENCY}, NULL, 0);
+            printf("EOT: sent emergency brake confirmation to HOT.\n");
+          } else if (msg_type.hot == HOT_MSG_DISCONNECT) {
+            printf("EOT: received disconnect\n");
+            state = EOT_IDLE;
+            memset(&conn, 0, sizeof(conn));
+          }
+        }
       default:
         break;
       }
@@ -273,42 +471,149 @@ void hot_run(communicator_t *comm) {
 
   conn_info_t conn; // current connection info
   memset(&conn, 0, sizeof(conn));
-  enum hot_state state = HOT_STATE_IDLE;
+  session_id_t recved_session_id = 0;
+  enum hot_state state = HOT_IDLE;
   uint8_t msg[MAX_MSG_LEN];
   msg_type_t msg_type;
-  time_t last_adv_time;
+  time_t last_adv_time = 0;
+  time_t pairing_start = 0;
   time_t now;
   time(&last_adv_time);
+  uint32_t input_pin = 0;
+  int choice;
   
   while (1) {
-    size_t recv_len = comm_recv(comm, &conn.session_id, &msg_type, msg, sizeof(msg));
+    size_t recv_len = comm_recv(comm, &recved_session_id, &msg_type, msg, sizeof(msg));
     if (recv_len == -1) {
       // timeout from recv, no message received
       switch (state) {
-      case HOT_STATE_IDLE:
-        printf("HOT_STATE_IDLE: waiting for user to push ARM button\n");
-        printf("Press enter to simulate button press...\n");
-        getchar();
+      case HOT_IDLE:
+        printf("HOT_IDLE: waiting for user to push ARM button\n");
+        wait_for_arm_button_press();
         printf("Button pressed, sending advertisement...\n");
-        state = HOT_STATE_ADV;
+        // reset connection info from previous session
+        memset(&conn, 0, sizeof(conn));
+        // generate random session_id for this session
+        conn.session_id = generate_session_id();
+        printf("session id: %u\n", conn.session_id);
+        state = HOT_ADV;
         break;
-      case HOT_STATE_ADV:
+      case HOT_ADV:
         time(&now);
-        if (difftime(now, last_adv_time) * 1000 >= HOT_STATE_ADV_INTERVAL_MS) {
+        if (difftime(now, last_adv_time) * 1000 >= HOT_ADV_INTERVAL_MS) {
           // send advertisement
           comm_send(comm, conn.session_id, (msg_type_t){.hot = HOT_MSG_ADV}, NULL, 0);
           last_adv_time = now;
           printf("HOT: sent advertisement\n");
         }
         break;
+      case HOT_KEY_EX_1:
+        time(&now);
+        if (difftime(now, pairing_start) * 1000 >= PAIRING_TIMEOUT) {
+          printf("HOT: Pairing timed out. Returning to idle state.\n");
+          state = HOT_IDLE;
+          memset(&conn, 0, sizeof(conn));
+        }
+        break;
+      case HOT_WAIT_FOR_PIN:
+        // In a real implementation, we would wait for user input here
+        printf("HOT: waiting for user to input PIN...\n");
+        printf("Enter PIN: ");
+        scanf("%u", &input_pin);
+        getchar(); // consume newline
+        if (input_pin == conn.pin) {
+          printf("HOT: PIN correct! Pairing successful.\n");
+          state = HOT_PAIRED;
+        } else {
+          printf("HOT: Incorrect PIN. Pairing failed.\n");
+          state = HOT_IDLE;
+        }
+        break;
+      case HOT_PAIRED:
+        printf("Select an option:\n");
+        printf("1. Request status update\n");
+        printf("2. Emergency brake\n");
+        printf("3. Disconnect (ARM button)\n");
+        printf("Enter choice: ");
+        choice = 0;
+        scanf("%d", &choice);
+        getchar(); // consume newline
+        if (choice == 1) {
+          comm_send(comm, conn.session_id, (msg_type_t){.hot = HOT_MSG_STATUS}, NULL, 0);
+          printf("HOT: sent status update request\n");
+          state = HOT_WAIT_FOR_STATUS;
+        } else if (choice == 2) {
+          comm_send(comm, conn.session_id, (msg_type_t){.hot = HOT_MSG_EMERGENCY}, NULL, 0);
+          printf("HOT: sent emergency brake request\n");
+          state = HOT_WAIT_FOR_EMERGENCY;
+        } else if (choice == 3) {
+          printf("HOT: Disconnecting...\n");
+          comm_send(comm, conn.session_id, (msg_type_t){.hot = HOT_MSG_DISCONNECT}, NULL, 0);
+          state = HOT_IDLE;
+          memset(&conn, 0, sizeof(conn));
+        } else {
+          printf("Invalid choice.\n");
+        }
+      case HOT_WAIT_FOR_EMERGENCY:
+        // TODO: retransmit emergency brake request if no response
+        break;
       default:
         break;
       }
     } else {
       switch (state) {
-      case HOT_STATE_ADV:
-        if (msg_type.eot == EOT_MSG_PUBKEY) {
-          printf("HOT: received EOT pubkey\n");
+      case HOT_ADV:
+        if (msg_type.eot == EOT_MSG_PUBKEY && recved_session_id == conn.session_id) {
+          printf("HOT: received EOT pubkey, initiating connection...\n");
+
+          time(&pairing_start);
+          
+          uint8_t eot_compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
+          memcpy(eot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
+          decompress_pubkey(eot_compressed_pubkey, conn.eot_keys.public);
+
+          // generate our keypair, nonce, and commitment
+          if (!generate_keypair(&conn.hot_keys)) {
+            fprintf(stderr, "Failed to generate HOT keypair\n");
+            exit(EXIT_FAILURE);
+          }
+          generate_nonce(&conn.hot_nonce);
+          create_commitment(&conn.hot_nonce, &conn.hot_commitment);
+          // send our public key and commitment to EOT
+          uint8_t compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
+          compress_pubkey(conn.hot_keys.public, compressed_pubkey);
+          uint8_t payload[COMPRESSED_PUBKEY_SIZE + COMMITMENT_SIZE];
+          memcpy(payload, compressed_pubkey, COMPRESSED_PUBKEY_SIZE);
+          memcpy(payload + COMPRESSED_PUBKEY_SIZE, conn.hot_commitment.data, COMMITMENT_SIZE);
+          comm_send(comm, conn.session_id, (msg_type_t){.hot = HOT_MSG_PUBKEY_AND_COMMIT}, payload, sizeof(payload));
+
+          printf("HOT: sent pubkey and commitment to EOT, waiting for their nonce...\n");
+          state = HOT_KEY_EX_1;
+        }
+        break;
+      case HOT_KEY_EX_1:
+        if (msg_type.eot == EOT_MSG_NONCE && recved_session_id == conn.session_id && recv_len == NONCE_SIZE) {
+          printf("HOT: received EOT nonce, sending our nonce...\n");
+          // can also generate the expected PIN here
+          memcpy(conn.eot_nonce.data, msg, NONCE_SIZE);
+          conn.pin = compute_pin(conn.eot_keys.public, conn.hot_keys.public, &conn.eot_nonce, &conn.hot_nonce);
+          // send our nonce to EOT
+          comm_send(comm, conn.session_id, (msg_type_t){.hot = HOT_MSG_NONCE}, conn.hot_nonce.data, sizeof(conn.hot_nonce.data));
+          printf("HOT: sent nonce to EOT, waiting for user to input PIN...\n");
+          state = HOT_WAIT_FOR_PIN;
+        }
+      case HOT_WAIT_FOR_STATUS:
+        if (msg_type.eot == EOT_MSG_STATUS && recved_session_id == conn.session_id && recv_len == sizeof(eot_status_t)) {
+          eot_status_t status;
+          memcpy(&status, msg, sizeof(eot_status_t));
+          display_eot_status(&status);
+          state = HOT_PAIRED;
+        }
+        break;
+      case HOT_WAIT_FOR_EMERGENCY:
+        if (msg_type.eot == EOT_MSG_EMERGENCY && recved_session_id == conn.session_id) {
+          printf("HOT: received emergency brake confirmation from EOT.\n");
+          state = HOT_PAIRED;
         }
         break;
       default:

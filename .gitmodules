@@ -1,3 +1,6 @@
 [submodule "secure_protocol/micro-ecc"]
 	path = secure_protocol/micro-ecc
 	url = https://github.com/kmackay/micro-ecc.git
+[submodule "secure_protocol/sha256"]
+	path = secure_protocol/sha256
+	url = https://github.com/LekKit/sha256.git
