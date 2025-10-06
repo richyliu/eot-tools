@@ -33,7 +33,7 @@ static int pkt_dropped[10];
 #define COMPRESSED_PUBKEY_SIZE (CURVE_SIZE + 1)
 #define PRIVKEY_SIZE CURVE_SIZE
 #define SHARED_SECRET_SIZE CURVE_SIZE
-#define SIGNATURE_SIZE 8 // number of bytes to use in HMAC-SHA256 signature
+#define SIGNATURE_SIZE 6 // number of bytes to use in HMAC-SHA256 signature
 
 #define NONCE_SIZE 16
 #define SHA256_SIZE 32
@@ -50,6 +50,7 @@ enum eot_msg {
   EOT_MSG_NONCE,
   EOT_MSG_STATUS,    // status update response
   EOT_MSG_EMERGENCY, // emergency brake confirmation
+  EOT_MSG_UPGRADE,   // sent in legacy mdoe to request protocol upgrade
 };
 enum hot_msg {
   // these are messages sent from HOT to EOT
@@ -68,6 +69,7 @@ enum eot_state {
   EOT_KEY_EX_1,    // sent our pubkey, waiting for theirs
   EOT_KEY_EX_2,    // received their pubkey and commitment, sending our nonce and waiting for theirs
   EOT_PAIRED,
+  EOT_LEGACY,
 };
 
 enum hot_state {
@@ -78,6 +80,8 @@ enum hot_state {
   HOT_PAIRED,
   HOT_WAIT_FOR_STATUS,
   HOT_WAIT_FOR_EMERGENCY, // wait for confirmation of emergency brake
+  HOT_LEGACY,
+  HOT_LEGACY_ARMED,
 };
 
 typedef struct {
@@ -106,6 +110,8 @@ typedef struct {
 } nonce_t;
 
 typedef uint32_t pin_t; // 5-digit PIN
+typedef uint32_t msg_ctr_t; // used for replay protection
+typedef uint32_t unit_id_t;
 
 typedef struct {
   uint32_t timeout_ms;
@@ -124,7 +130,7 @@ typedef struct {
   nonce_t eot_nonce;
   nonce_t hot_nonce;
   pin_t pin;
-  uint32_t ctr; // current message counter for replay protection (only used once paired)
+  msg_ctr_t ctr; // message counter for replay protection
 } conn_info_t;
 
 typedef struct timespec timer_t;
@@ -395,8 +401,32 @@ void comm_send(communicator_t* comm,
   }
 }
 
+void comm_send_legacy(communicator_t* comm,
+                      const unit_id_t unit_id,
+                      const uint8_t *msg,
+                      const size_t msg_len) {
+  uint32_t legacy_header;
+  memcpy(&legacy_header, "OLD!", 4);
+  size_t total_len = sizeof(legacy_header) + sizeof(unit_id_t) + msg_len;
+  if (total_len > MAX_PKT_LEN) {
+    fprintf(stderr, "Message too long to send (%zu bytes)\n", total_len);
+    exit(EXIT_FAILURE);
+  }
+  uint8_t buffer[MAX_PKT_LEN];
+  memcpy(buffer, &legacy_header, sizeof(legacy_header));
+  memcpy(buffer + sizeof(legacy_header), &unit_id, sizeof(unit_id_t));
+  memcpy(buffer + sizeof(legacy_header) + sizeof(unit_id_t), msg, msg_len);
+  if (sendto(comm->send_fd, buffer, total_len, 0,
+             (struct sockaddr*)&comm->send_addr, sizeof(comm->send_addr)) != total_len) {
+    perror("sendto");
+    exit(EXIT_FAILURE);
+  }
+  printf("sent legacy message of length %zu\n", total_len);
+}
+
 // returns -1 on timeout, -2 on signature failure, or length of received message
 // only checks for signature if shared_secret is not NULL
+// returns negative length of message on legacy message
 ssize_t comm_recv(communicator_t* comm,
                   session_id_t *session_id,
                   msg_type_t *msg_type,
@@ -414,6 +444,21 @@ ssize_t comm_recv(communicator_t* comm,
     }
     perror("recvfrom");
     exit(EXIT_FAILURE);
+  }
+
+  if (recv_len >= 4 && memcmp(buffer, "OLD!", 4) == 0) {
+    // legacy message must include the 4-byte header and unit_id, although we keep unit_id as part of msg
+    if (recv_len < 4 + sizeof(unit_id_t)) {
+      fprintf(stderr, "Received legacy message too short (%zd bytes)\n", recv_len);
+      return -2;
+    }
+    size_t payload_len = recv_len - 4;
+    if (payload_len > max_msg_len) {
+      fprintf(stderr, "Received legacy message too long (%zu bytes)\n", payload_len);
+      exit(EXIT_FAILURE);
+    }
+    memcpy(msg, buffer + 4, payload_len);
+    return -((ssize_t)payload_len); // negative length indicates legacy message
   }
 
   size_t payload_len = recv_len - header_len;
@@ -501,7 +546,17 @@ void wait_for_arm_button_press() {
   getchar();
 }
 
-void eot_run(communicator_t *comm) {
+void eot_handle_legacy_message(const uint8_t *msg, size_t msg_len) {
+  // In a real implementation, handle legacy messages appropriately
+  printf("EOT: Received legacy message (not implemented)\n");
+}
+
+void hot_handle_legacy_message(const uint8_t *msg, size_t msg_len) {
+  // In a real implementation, handle legacy messages appropriately
+  printf("HOT: Received legacy message (not implemented)\n");
+}
+
+void eot_run(communicator_t *comm, unit_id_t unit_id) {
   // EOT main loop
 
   conn_info_t conn; // current connection info
@@ -518,6 +573,7 @@ void eot_run(communicator_t *comm) {
   timer_now(&pairing_start);
   timer_now(&now);
   uint8_t* shared_secret;
+  int choice = 0;
 
   while (1) {
     // use shared_secret once paired
@@ -528,15 +584,32 @@ void eot_run(communicator_t *comm) {
     }
     ssize_t recv_len = comm_recv(comm, &recved_session_id, &msg_type, msg, sizeof(msg), shared_secret);
     timer_now(&now);
-    if (recv_len < 0) {
+    if (recv_len == -1) {
       // timeout from recv, no message received
       switch (state) {
       case EOT_IDLE:
         printf("EOT_IDLE: waiting for user to push ARM button\n");
-        wait_for_arm_button_press();
-        printf("Button pressed, waiting for HOT advertisement...\n");
-        timer_now(&adv_start);
-        state = EOT_WAIT_ADV;
+        printf("Options:\n");
+        printf("  1: Push ARM button to start pairing\n");
+        printf("  2: Enter legacy mode (hold ARM button for 5 seconds) (ID: %05u)\n", unit_id);
+        printf("Enter choice: ");
+        scanf("%d", &choice);
+        while (getchar() != '\n'); // clear input buffer
+        if (choice == 1) {
+          printf("Button pressed, waiting for HOT advertisement...\n");
+          timer_now(&adv_start);
+          state = EOT_WAIT_ADV;
+        } else if (choice == 2) {
+          printf("Entering legacy mode and sending legacy ARM command\n");
+          state = EOT_LEGACY;
+          // also send protocol upgrade request to prevent pairing in
+          // legacy mode if both devices support the new protocol
+          comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t*)&unit_id, sizeof(unit_id), NULL);
+          comm_send_legacy(comm, unit_id, (uint8_t*)"ARM", 3);
+          printf("Press enter to exit legacy mode back to idle state...\n");
+        } else {
+          printf("Invalid choice, staying in idle state.\n");
+        }
         break;
       case EOT_WAIT_ADV:
         if (timer_diff_ms(&now, &adv_start) >= EOT_WAIT_ADV_TIMEOUT_MS) {
@@ -569,9 +642,38 @@ void eot_run(communicator_t *comm) {
           fcntl(STDIN_FILENO, F_SETFL, flags);
         }
         break;
+      case EOT_LEGACY:
+        // check for user input (non-blocking) to exit legacy mode
+        {
+          int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
+          fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+          char buf[16];
+          if (read(STDIN_FILENO, buf, sizeof(buf)) > 0) {
+            printf("Pressed enter (ARM button), exiting legacy mode and returning to idle state...\n");
+            state = EOT_IDLE;
+          }
+          fcntl(STDIN_FILENO, F_SETFL, flags);
+        }
+        break;
       default:
         break;
       }
+    } else if (recv_len == -2) {
+      // signature verification failed
+      printf("EOT: received message with invalid signature, ignoring.\n");
+    } else if (recv_len < 0) {
+      // legacy message received
+      if (state != EOT_LEGACY) {
+        printf("EOT: received legacy message while not in legacy state, ignoring.\n");
+        continue;
+      }
+      if (-recv_len < sizeof(unit_id_t)) {
+        fprintf(stderr, "EOT: received legacy message too short (%zd bytes), ignoring.\n", -recv_len);
+        continue;
+      }
+      unit_id_t legacy_unit_id;
+      memcpy(&legacy_unit_id, msg, sizeof(unit_id_t));
+      eot_handle_legacy_message(msg + sizeof(unit_id_t), -recv_len - sizeof(unit_id_t));
     } else {
       /* printf("received msg type=%d session_id=%u len=%zu state=%d\n", msg_type, recved_session_id, recv_len, state); */
       switch (state) {
@@ -649,8 +751,7 @@ void eot_run(communicator_t *comm) {
             printf("EOT: received message too short for counter, ignoring.\n");
             break;
           }
-          uint32_t recv_ctr;
-          memcpy(&recv_ctr, msg, sizeof(recv_ctr));
+          msg_ctr_t recv_ctr = *(msg_ctr_t*)msg;
           if (recv_ctr <= conn.ctr) {
             printf("EOT: received message with old counter (%u <= %u), ignoring.\n", recv_ctr, conn.ctr);
             break;
@@ -697,6 +798,7 @@ void hot_run(communicator_t *comm) {
   uint32_t input_pin = 0;
   int choice;
   uint8_t* shared_secret;
+  unit_id_t recent_upgradable_legacy_unit_id = 0;
   
   while (1) {
     // use shared_secret once paired
@@ -707,19 +809,35 @@ void hot_run(communicator_t *comm) {
     }
     ssize_t recv_len = comm_recv(comm, &recved_session_id, &msg_type, msg, sizeof(msg), shared_secret);
     timer_now(&now);
-    if (recv_len < 0) {
+    if (recv_len == -1) {
       // timeout from recv, no message received
       switch (state) {
       case HOT_IDLE:
         printf("HOT_IDLE: waiting for user to push ARM button\n");
-        wait_for_arm_button_press();
-        printf("Button pressed, sending advertisement...\n");
-        // reset connection info from previous session
-        memset(&conn, 0, sizeof(conn));
-        // generate random session_id for this session
-        conn.session_id = generate_session_id();
-        printf("session id: %u\n", conn.session_id);
-        state = HOT_ADV;
+        printf("Options:\n");
+        printf("  -1: Push ARM button to start pairing\n");
+        printf("  <5-digit unit ID>: Enter legacy mode with given unit ID\n");
+        printf("Enter choice: ");
+        scanf("%d", &choice);
+        while (getchar() != '\n'); // clear input buffer
+        if (choice == -1) {
+          printf("Button pressed, sending advertisement...\n");
+          // reset connection info from previous session
+          memset(&conn, 0, sizeof(conn));
+          // generate random session_id for this session
+          conn.session_id = generate_session_id();
+          printf("session id: %u\n", conn.session_id);
+          state = HOT_ADV;
+        } else if (choice >= 0 && choice <= 99999) {
+          if (recent_upgradable_legacy_unit_id == choice) {
+            printf("Requested to pair in legacy mode with unit ID %05u, but it supports the new protocol. Please use the new protocol to pair.\n", choice);
+          } else {
+            printf("Entering legacy mode with unit ID %05u\n", choice);
+            state = HOT_LEGACY;
+          }
+        } else {
+          printf("Invalid choice, staying in idle state.\n");
+        }
         break;
       case HOT_ADV:
         if (timer_diff_ms(&now, &last_adv_time) >= HOT_ADV_INTERVAL_MS) {
@@ -808,7 +926,36 @@ void hot_run(communicator_t *comm) {
       default:
         break;
       }
+    } else if (recv_len == -2) {
+      // signature verification failed
+      printf("HOT: received message with invalid signature, ignoring.\n");
+    } else if (recv_len < 0) {
+      // legacy message received
+      if (state != HOT_LEGACY) {
+        printf("HOT: received legacy message while not in legacy state, ignoring.\n");
+        continue;
+      }
+      if (-recv_len < sizeof(unit_id_t)) {
+        fprintf(stderr, "HOT: received legacy message too short (%zd bytes), ignoring.\n", -recv_len);
+        continue;
+      }
+      unit_id_t legacy_unit_id;
+      memcpy(&legacy_unit_id, msg, sizeof(unit_id_t));
+      if (recent_upgradable_legacy_unit_id != 0 && legacy_unit_id == recent_upgradable_legacy_unit_id) {
+        printf("HOT: received legacy message from recently upgradable unit ID %u, ignoring to prevent downgrade attack.\n", legacy_unit_id);
+      } else if (recv_len > sizeof(unit_id_t) + 3 && memcmp(msg + sizeof(unit_id_t), "ARM", 3) == 0) {
+        printf("HOT: received legacy ARM command from unit ID %u, entering legacy ARMED mode.\n", legacy_unit_id);
+        state = HOT_LEGACY_ARMED;
+      } else if (state == HOT_LEGACY_ARMED) {
+        hot_handle_legacy_message(msg + sizeof(unit_id_t), -recv_len - sizeof(unit_id_t));
+      } else {
+        printf("HOT: received legacy message from unit ID %u while not in legacy state, ignoring.\n", legacy_unit_id);
+      }
     } else {
+      if (msg_type == EOT_MSG_UPGRADE && recv_len == sizeof(unit_id_t)) {
+        memcpy(&recent_upgradable_legacy_unit_id, msg, sizeof(unit_id_t));
+        printf("HOT: received protocol upgrade request from legacy unit ID %u\n", recent_upgradable_legacy_unit_id);
+      }
       switch (state) {
       case HOT_ADV:
         if (msg_type == EOT_MSG_PUBKEY && recved_session_id == conn.session_id) {
@@ -920,9 +1067,10 @@ void init_communicator(communicator_t *comm,
 
 int eot_main() {
   communicator_t comm;
+  unit_id_t sample_unit_id = 12345;
   printf("EOT starting...\n");
   init_communicator(&comm, EOT_TO_HOT_SOCKET_PATH, HOT_TO_EOT_SOCKET_PATH, DEFAULT_TIMEOUT_MS);
-  eot_run(&comm);
+  eot_run(&comm, sample_unit_id);
   return 0;
 }
 
