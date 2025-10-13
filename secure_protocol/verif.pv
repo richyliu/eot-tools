@@ -1,0 +1,194 @@
+(* ProVerif model for EOT-HOT pairing protocol *)
+(* Protocol establishes shared secret with PIN authentication *)
+
+(* Types *)
+type key.
+type nonce.
+type commitment.
+type pin.
+type message.
+type pkey.
+type skey.
+type counter.
+
+(* Communication channels *)
+free radio: channel.          (* Insecure UHF radio channel *)
+free operator: channel [private]. (* Secure human operator channel *)
+free button: channel [private].   (* Physical button press channel *)
+
+(* Cryptographic primitives *)
+
+(* Elliptic Curve operations on NIST P-256 *)
+fun pk(skey): pkey.              (* Generate public key from private key *)
+fun ecdh(skey, pkey): key.       (* ECDH shared secret computation *)
+
+(* Hash functions *)
+fun sha256(bitstring): bitstring.
+fun commit(nonce): commitment [data].
+reduc forall n: nonce; open(commit(n)) = n.
+
+(* PIN generation function *)
+fun makePin(nonce, nonce, pkey, pkey): pin [data].
+
+(* HMAC for message authentication after pairing *)
+fun hmac(key, counter, message): bitstring.
+
+fun make_counter(): counter.
+fun inc_counter(counter): counter.
+
+(* Equations for ECDH *)
+equation forall a: skey, b: skey; ecdh(a, pk(b)) = ecdh(b, pk(a)).
+
+(* Example message for testing replay resistance and integrity *)
+free message1: message [private].
+free message2: message [private].
+
+(* Events for security properties *)
+event EOTStart().
+event HOTStart().
+event EOTSendsPubKey(pkey).
+event HOTReceivesPubKey(pkey).
+event HOTSendsCommitment(commitment, pkey).
+event EOTReceivesCommitment(commitment, pkey).
+event EOTSendsNonce(nonce).
+event HOTReceivesNonce(nonce).
+event HOTSendsNonce(nonce).
+event EOTReceivesNonce(nonce).
+event PinGenerated(pin).
+event PinVerified(pin).
+event ButtonPressed().
+event EOTEstablishedSecret(key).
+event HOTEstablishedSecret(key).
+event MessageSent(message, counter, bitstring).
+event MessageVerified(message, counter, bitstring).
+event EOTAcceptsHOT(pkey, pkey).
+event HOTAcceptsEOT(pkey, pkey).
+
+
+(* Security queries *)
+
+(* PIN verification correspondence *)
+query p: pin;
+  inj-event(PinVerified(p)) ==> inj-event(PinGenerated(p)).
+
+(* Attacker cannot forge or modify authenticated messages  *)
+query m: message, c: counter, mac: bitstring;
+  inj-event(MessageVerified(m, c, mac)) ==> inj-event(MessageSent(m, c, mac)).
+
+(* TODO: Replay resistance *)
+(* TODO: Shared secret agreement *)
+(* TODO: Mutual authentication *)
+
+
+(* EOT Process *)
+let processEOT() =
+  (* Step 0: Initialize *)
+  event EOTStart();
+  
+  (* Step 1: Generate keypair and send public key *)
+  new skEOT: skey;
+  let pkEOT = pk(skEOT) in
+  event EOTSendsPubKey(pkEOT);
+  out(radio, pkEOT);
+  
+  (* Step 2: Receive HOT's public key and commitment *)
+  in(radio, (pkHOT: pkey, cHOT: commitment));
+  event EOTReceivesCommitment(cHOT, pkHOT);
+  
+  (* Step 3: Generate and send nonce *)
+  new nEOT: nonce;
+  event EOTSendsNonce(nEOT);
+  out(radio, nEOT);
+  
+  (* Step 4: Receive HOT's nonce and verify commitment *)
+  in(radio, nHOT: nonce);
+  event EOTReceivesNonce(nHOT);
+  
+  (* Verify commitment *)
+  if open(cHOT) = nHOT then
+  (
+    (* Step 5: Generate PIN and display to operator *)
+    let pinValue = makePin(nEOT, nHOT, pkEOT, pkHOT) in
+    event PinGenerated(pinValue);
+    out(operator, pinValue);
+    
+    (* Step 6: Wait for button press from operator *)
+    in(button, =true);
+    event ButtonPressed();
+    event EOTAcceptsHOT(pkEOT, pkHOT);
+    
+    (* Compute shared secret *)
+    let sharedSecret = ecdh(skEOT, pkHOT) in
+    event EOTEstablishedSecret(sharedSecret);
+    
+    (* Now can send authenticated messages *)
+    let ctr = make_counter() in
+    (
+    let mac = hmac(sharedSecret, ctr, message1) in
+    event MessageSent(message1, ctr, mac);
+    out(radio, (message1, ctr, mac));
+
+    let ctr2 = inc_counter(ctr) in
+    let mac2 = hmac(sharedSecret, ctr2, message2) in
+    event MessageSent(message2, ctr2, mac2);
+    out(radio, (message2, ctr2, mac2))
+    )
+  ).
+
+(* HOT Process *)
+let processHOT() =
+  (* Step 0: Initialize *)
+  event HOTStart();
+  
+  (* Step 1: Receive EOT's public key *)
+  in(radio, pkEOT: pkey);
+  event HOTReceivesPubKey(pkEOT);
+  
+  (* Step 2: Generate keypair, nonce, and send public key with commitment *)
+  new skHOT: skey;
+  let pkHOT = pk(skHOT) in
+  new nHOT: nonce;
+  let cHOT = commit(nHOT) in
+  event HOTSendsCommitment(cHOT, pkHOT);
+  out(radio, (pkHOT, cHOT));
+  
+  (* Step 3: Receive EOT's nonce *)
+  in(radio, nEOT: nonce);
+  event HOTReceivesNonce(nEOT);
+  
+  (* Step 4: Send nonce *)
+  event HOTSendsNonce(nHOT);
+  out(radio, nHOT);
+  
+  (* Step 5: Calculate expected PIN and receive operator input *)
+  let expectedPin = makePin(nEOT, nHOT, pkEOT, pkHOT) in
+  in(operator, receivedPin: pin);
+  
+  (* Verify PIN matches *)
+  if receivedPin = expectedPin then
+  (
+    event PinVerified(receivedPin);
+    event HOTAcceptsEOT(pkEOT, pkHOT);
+    
+    (* Signal operator to press button *)
+    out(button, true);
+    
+    (* Compute shared secret *)
+    let sharedSecret = ecdh(skHOT, pkEOT) in
+    event HOTEstablishedSecret(sharedSecret);
+    
+    (* Receive and verify authenticated messages *)
+    let local_ctr = make_counter() in
+    (
+    in(radio, (msg: message, ctr: counter, mac: bitstring));
+    if mac = hmac(sharedSecret, ctr, msg) && local_ctr = ctr then
+      event MessageVerified(msg, ctr, mac);
+    in(radio, (msg2: message, ctr2: counter, mac2: bitstring));
+    if mac2 = hmac(sharedSecret, ctr2, msg2) && inc_counter(local_ctr) = ctr2 then
+      event MessageVerified(msg2, ctr2, mac2)
+    )
+  ).
+
+(* Main process *)
+process
+  ( (!processEOT()) | (!processHOT()) )
