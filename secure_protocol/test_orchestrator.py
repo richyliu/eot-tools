@@ -2,7 +2,7 @@
 """
 Test orchestrator for EOT/HOT device protocol testing.
 
-Runs ./main eot and ./main hot in parallel, allowing:
+Runs ./eot and ./hot in parallel, allowing:
 - Assertion of output patterns
 - Input injection to stdin
 - Logging to file for debugging
@@ -30,9 +30,8 @@ SOCKET_PATHS = [
 class DeviceRunner:
     """Manages a single device subprocess (eot or hot)."""
 
-    def __init__(self, executable: str, device_type: str, packet_drops: Optional[list[int]] = None):
+    def __init__(self, executable: str, packet_drops: Optional[list[int]] = None):
         self.executable = executable
-        self.device_type = device_type
         self.packet_drops = packet_drops or []
         self.process: Optional[asyncio.subprocess.Process] = None
         self._output_queue: asyncio.Queue = asyncio.Queue()
@@ -43,16 +42,15 @@ class DeviceRunner:
         self._pty_master_consumed: bool = False
         self._transport: Optional[asyncio.BaseTransport] = None
         self.start_time: float = 0.0
+        self._device_name: str = Path(executable).stem
 
     def _build_args(self) -> list[str]:
-        args = [self.device_type]
-        args.extend(str(p) for p in self.packet_drops)
-        return args
+        return [str(p) for p in self.packet_drops]
 
     async def start(self, log_dir: Path) -> None:
         """Start the device subprocess with PTY for proper buffering."""
         self.start_time = time.time()
-        self.log_path = log_dir / f"{self.device_type}.log"
+        self.log_path = log_dir / f"{self._device_name}.log"
 
         args = self._build_args()
 
@@ -80,7 +78,7 @@ class DeviceRunner:
             return
 
         with open(log_path, "w") as log_f:
-            log_f.write(f"=== {self.device_type.upper()} started at {datetime.now()} ===\n")
+            log_f.write(f"=== {self._device_name.upper()} started at {datetime.now()} ===\n")
             log_f.flush()
 
             reader = asyncio.StreamReader()
@@ -138,7 +136,7 @@ class DeviceRunner:
                         return line
         except asyncio.TimeoutError:
             raise asyncio.TimeoutError(
-                f"[{self.device_type}] Pattern '{pattern}' not found within {timeout}s. "
+                f"[{self._device_name}] Pattern '{pattern}' not found within {timeout}s. "
                 f"Recent output:\n" + "\n".join(self._output_history[-10:])
             )
 
@@ -150,7 +148,7 @@ class DeviceRunner:
             AssertionError: If pattern not found within timeout
         """
         elapsed = time.time() - self.start_time
-        print(f"[{elapsed:.3f}s] [{self.device_type}] Waiting for pattern: {pattern}")
+        print(f"[{elapsed:.3f}s] [{self._device_name}] Waiting for pattern: {pattern}")
         try:
             return await self.wait_for_output(pattern, timeout)
         except asyncio.TimeoutError as e:
@@ -159,7 +157,7 @@ class DeviceRunner:
     async def send_input(self, text: str) -> None:
         """Send input to the device's stdin."""
         if not self.process or not self.process.stdin:
-            raise RuntimeError(f"[{self.device_type}] Process not started")
+            raise RuntimeError(f"[{self._device_name}] Process not started")
         self.process.stdin.write(text.encode())
         await self.process.stdin.drain()
 
@@ -204,8 +202,9 @@ class DeviceRunner:
 class TestOrchestrator:
     """Manages both EOT and HOT devices for testing."""
 
-    def __init__(self, executable: str = "./main"):
-        self.executable = executable
+    def __init__(self, eot_bin: str = "./eot", hot_bin: str = "./hot"):
+        self.eot_bin = eot_bin
+        self.hot_bin = hot_bin
         self.eot: Optional[DeviceRunner] = None
         self.hot: Optional[DeviceRunner] = None
         self.log_dir: Optional[Path] = None
@@ -228,8 +227,8 @@ class TestOrchestrator:
         self.log_dir = Path(f"test_logs/{test_name}_{timestamp}")
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
-        self.eot = DeviceRunner(self.executable, "eot", eot_drops)
-        self.hot = DeviceRunner(self.executable, "hot", hot_drops)
+        self.eot = DeviceRunner(self.eot_bin, eot_drops)
+        self.hot = DeviceRunner(self.hot_bin, hot_drops)
 
         await asyncio.gather(
             self.eot.start(self.log_dir),

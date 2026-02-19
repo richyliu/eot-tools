@@ -10,8 +10,9 @@ DEPS = micro-ecc/uECC.c sha256/sha256.c
 
 ifeq ($(TARGET),arm)
     # ARM toolchain
-    CC = arm-none-eabi-gcc
-    OBJCOPY = arm-none-eabi-objcopy
+    # CC = arm-none-eabi-gcc
+    CC = /opt/homebrew/opt/arm-none-eabi-gcc@9/bin/arm-none-eabi-gcc
+    OBJCOPY = /opt/homebrew/opt/arm-none-eabi-binutils/bin/arm-none-eabi-objcopy
     
     # ARM Cortex-M4 specific flags
     MCU_FLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=soft
@@ -23,7 +24,8 @@ ifeq ($(TARGET),arm)
     
     # Use ARM stub implementations
     EXT_SOURCES = comm_arm.c ext_timer_arm.c ext_io_arm.c ext_random_arm.c ext_utils_arm.c arm_support.c
-    OUTPUT = main.elf
+    OUTPUT_EOT = eot.elf
+    OUTPUT_HOT = hot.elf
     
 else
     # Unix target
@@ -32,46 +34,60 @@ else
     LDFLAGS = -flto
     UECC_FLAGS =
     EXT_SOURCES = comm_socket.c ext_timer.c ext_io.c ext_random.c ext_utils.c
-    OUTPUT = main
+    OUTPUT_EOT = eot
+    OUTPUT_HOT = hot
 endif
 
 # All sources
 SOURCES = $(CORE_SOURCES) $(EXT_SOURCES)
 
 # Default target
-.PHONY: all
-all: $(OUTPUT)
+.PHONY: all_platforms
+all_platforms: unix arm
 
-# Main build target
-$(OUTPUT): $(SOURCES) $(DEPS)
-	$(CC) $(CFLAGS) $(UECC_FLAGS) -o $(OUTPUT) $(SOURCES) $(DEPS) $(LDFLAGS)
+.PHONY: all
+all: $(OUTPUT_EOT) $(OUTPUT_HOT)
+
+# EOT build target
+$(OUTPUT_EOT): $(SOURCES) $(DEPS)
+	$(CC) $(CFLAGS) $(UECC_FLAGS) -DEOT_DEVICE -o $(OUTPUT_EOT) $(SOURCES) $(DEPS) $(LDFLAGS)
 ifeq ($(TARGET),arm)
-	$(OBJCOPY) -O binary main.elf main.bin
-	$(OBJCOPY) -O ihex main.elf main.hex
+	$(OBJCOPY) -O binary $(OUTPUT_EOT) eot.bin
+	$(OBJCOPY) -O ihex $(OUTPUT_EOT) eot.hex
+endif
+
+# HOT build target
+$(OUTPUT_HOT): $(SOURCES) $(DEPS)
+	$(CC) $(CFLAGS) $(UECC_FLAGS) -o $(OUTPUT_HOT) $(SOURCES) $(DEPS) $(LDFLAGS)
+ifeq ($(TARGET),arm)
+	$(OBJCOPY) -O binary $(OUTPUT_HOT) hot.bin
+	$(OBJCOPY) -O ihex $(OUTPUT_HOT) hot.hex
 endif
 
 # Clean target
 .PHONY: clean
 clean:
-	rm -f main main.elf main.bin main.hex
+	rm -f eot hot eot.elf hot.elf eot.bin hot.bin eot.hex hot.hex
 
 # Debug build with symbols and no optimization
 .PHONY: debug
 debug: CFLAGS += -g -O0 -DDEBUG
-debug: $(OUTPUT)
+debug: $(OUTPUT_EOT) $(OUTPUT_HOT)
 
 # Build with custom timer/IO implementations
 # Usage: make CUSTOM_EXT=timer_io.c
 ifdef CUSTOM_EXT
-$(OUTPUT): $(SOURCES) $(DEPS) $(CUSTOM_EXT)
-	$(CC) $(CFLAGS) -o $(OUTPUT) $(SOURCES) $(CUSTOM_EXT) $(DEPS) $(LDFLAGS)
+$(OUTPUT_EOT): $(SOURCES) $(DEPS) $(CUSTOM_EXT)
+	$(CC) $(CFLAGS) -DEOT_DEVICE -o $(OUTPUT_EOT) $(SOURCES) $(CUSTOM_EXT) $(DEPS) $(LDFLAGS)
+$(OUTPUT_HOT): $(SOURCES) $(DEPS) $(CUSTOM_EXT)
+	$(CC) $(CFLAGS) -o $(OUTPUT_HOT) $(SOURCES) $(CUSTOM_EXT) $(DEPS) $(LDFLAGS)
 endif
 
 # Convenience targets
 .PHONY: arm
 arm:
-	$(MAKE) TARGET=arm
+	$(MAKE) TARGET=arm all
 
 .PHONY: unix
 unix:
-	$(MAKE) TARGET=unix
+	$(MAKE) TARGET=unix all
