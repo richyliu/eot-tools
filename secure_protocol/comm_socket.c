@@ -15,6 +15,9 @@
 
 #include "comm.h"
 
+#define EOT_TO_HOT_SOCKET_PATH "/tmp/eot_to_hot.sock"
+#define HOT_TO_EOT_SOCKET_PATH "/tmp/hot_to_eot.sock"
+
 // Maximum packet length
 #define MAX_PKT_LEN 512
 
@@ -25,13 +28,23 @@ struct comm_handle {
   uint32_t timeout_ms;
 };
 
-comm_handle_t* comm_init(const char *send_path, const char *recv_path, uint32_t timeout_ms) {
+comm_handle_t* comm_init(comm_device_type_t device_type, uint32_t timeout_ms) {
   comm_handle_t *handle = malloc(sizeof(comm_handle_t));
   if (!handle) {
     return NULL;
   }
   
   handle->timeout_ms = timeout_ms;
+
+  const char *send_path;
+  const char *recv_path;
+  if (device_type == COMM_DEVICE_EOT) {
+    send_path = EOT_TO_HOT_SOCKET_PATH;
+    recv_path = HOT_TO_EOT_SOCKET_PATH;
+  } else {
+    send_path = HOT_TO_EOT_SOCKET_PATH;
+    recv_path = EOT_TO_HOT_SOCKET_PATH;
+  }
   
   // Create send socket
   handle->send_fd = socket(AF_UNIX, SOCK_DGRAM, 0);

@@ -1,10 +1,12 @@
+#include "devices.h"
+
+#ifdef TARGET_UNIX
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#endif
 
-#include "devices.h"
-
-
+#ifdef TARGET_UNIX
 int main(int argc, char *argv[]) {
   if (argc < 2) {
     fprintf(stderr, "Usage: %s {eot|hot} [packet drop numbers...]\n", argv[0]);
@@ -12,7 +14,6 @@ int main(int argc, char *argv[]) {
   }
 
   if (argc > 2) {
-    // use subsequent arguments as packet drop numbers (for testing)
     for (int i = 2; i < argc; i++) {
       int pkt_num = atoi(argv[i]);
       printf("Will drop packet %d\n", pkt_num);
@@ -31,3 +32,43 @@ int main(int argc, char *argv[]) {
 
   return 0;
 }
+#endif
+
+#ifdef TARGET_ARM
+void main_arm(void) {
+#ifdef EOT_DEVICE
+  eot_main();
+#else
+  hot_main();
+#endif
+}
+
+void Reset_Handler(void) {
+  main_arm();
+  while (1) { }
+}
+
+void Default_Handler(void) {
+  while (1) { }
+}
+
+__attribute__((section(".vectors")))
+void (*const vector_table[])(void) = {
+    (void (*)(void))0x20010000,
+    Reset_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+    Default_Handler,
+};
+#endif

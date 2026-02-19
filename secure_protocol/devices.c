@@ -30,9 +30,6 @@
 #include "ext_io.h"
 #include "ext_random.h"
 
-#define EOT_TO_HOT_SOCKET_PATH "/tmp/eot_to_hot.sock"
-#define HOT_TO_EOT_SOCKET_PATH "/tmp/hot_to_eot.sock"
-
 // for testing packet dropping
 static int pkt_dropped[10];
 #define PACKET_SEND_DELAY_MS_PER_BYTE 15 // simulate a delay in sending packets
@@ -149,13 +146,13 @@ typedef struct {
 } conn_info_t;
 
 // Use ext_timer_t from ext_timer.h
-typedef ext_timer_t timer_t;
+typedef ext_timer_t protocol_timer_t;
 
-static inline void timer_now(timer_t *t) {
+static inline void timer_now(protocol_timer_t *t) {
   ext_timer_now(t);
 }
 
-static inline int timer_diff_ms(const timer_t *end, const timer_t *start) {
+static inline int timer_diff_ms(const protocol_timer_t *end, const protocol_timer_t *start) {
   return ext_timer_diff_ms(end, start);
 }
 
@@ -538,9 +535,9 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
   uint8_t msg[MAX_MSG_LEN];
   msg_type_t msg_type;
   eot_status_t status;
-  timer_t adv_start;
-  timer_t pairing_start;
-  timer_t now;
+  protocol_timer_t adv_start;
+  protocol_timer_t pairing_start;
+  protocol_timer_t now;
   timer_now(&adv_start);
   timer_now(&pairing_start);
   timer_now(&now);
@@ -756,10 +753,10 @@ void hot_run(communicator_t *comm) {
   enum hot_state state = HOT_IDLE;
   uint8_t msg[MAX_MSG_LEN];
   msg_type_t msg_type;
-  timer_t last_adv_time;
-  timer_t last_transmit_time;
-  timer_t pairing_start;
-  timer_t now;
+  protocol_timer_t last_adv_time;
+  protocol_timer_t last_transmit_time;
+  protocol_timer_t pairing_start;
+  protocol_timer_t now;
   timer_now(&last_adv_time);
   timer_now(&last_transmit_time);
   timer_now(&pairing_start);
@@ -989,11 +986,10 @@ void hot_run(communicator_t *comm) {
 }
 
 void init_communicator(communicator_t *comm,
-                         const char *send_socket_path,
-                         const char *recv_socket_path,
+                         comm_device_type_t device_type,
                          const uint32_t timeout_ms) {
   comm->timeout_ms = timeout_ms;
-  comm->comm_h = comm_init(send_socket_path, recv_socket_path, timeout_ms);
+  comm->comm_h = comm_init(device_type, timeout_ms);
   if (!comm->comm_h) {
     ext_io_eprintf("Failed to initialize communication\n");
     ext_exit(1);
@@ -1010,7 +1006,7 @@ int eot_main() {
   ext_random_init();
   
   ext_io_puts("EOT starting...\n");
-  init_communicator(&comm, EOT_TO_HOT_SOCKET_PATH, HOT_TO_EOT_SOCKET_PATH, DEFAULT_TIMEOUT_MS);
+  init_communicator(&comm, COMM_DEVICE_EOT, DEFAULT_TIMEOUT_MS);
   eot_run(&comm, sample_unit_id);
   return 0;
 }
@@ -1024,7 +1020,7 @@ int hot_main() {
   ext_random_init();
   
   ext_io_puts("HOT starting...\n");
-  init_communicator(&comm, HOT_TO_EOT_SOCKET_PATH, EOT_TO_HOT_SOCKET_PATH, DEFAULT_TIMEOUT_MS);
+  init_communicator(&comm, COMM_DEVICE_HOT, DEFAULT_TIMEOUT_MS);
   hot_run(&comm);
   return 0;
 }

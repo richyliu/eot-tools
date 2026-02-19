@@ -11,7 +11,20 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#ifdef TARGET_UNIX
 #include <sys/types.h>
+#else
+#ifndef _SSIZE_T_DEFINED
+typedef int ssize_t;
+#define _SSIZE_T_DEFINED
+#endif
+#endif
+
+typedef enum {
+    COMM_DEVICE_EOT,
+    COMM_DEVICE_HOT
+} comm_device_type_t;
 
 // Opaque communication handle
 typedef struct comm_handle comm_handle_t;
@@ -19,12 +32,11 @@ typedef struct comm_handle comm_handle_t;
 /**
  * Initialize device communication
  * 
- * @param send_path Path/identifier for sending (implementation-specific)
- * @param recv_path Path/identifier for receiving (implementation-specific)
+ * @param device_type Whether this is an EOT or HOT device
  * @param timeout_ms Receive timeout in milliseconds
  * @return Handle to communication connection, or NULL on failure
  */
-comm_handle_t* comm_init(const char *send_path, const char *recv_path, uint32_t timeout_ms);
+comm_handle_t* comm_init(comm_device_type_t device_type, uint32_t timeout_ms);
 
 /**
  * Send data over communication
