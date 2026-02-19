@@ -1,3 +1,24 @@
+/**
+ * This is an upgraded protocol for communication between end-of-train
+ * devices (EOTD) and head-of-train devices (HOTD) that supports
+ * message authentication using ECDH and HMAC-SHA256, as well as
+ * a legacy mode for backward compatibility.
+ *
+ * To ensure minimal operator changes, the pairing process is designed
+ * to be as similar to the old process as possible. The old pairing
+ * procedure is described below:
+ * 1. Railman installs the EOTD to the end of the train and relays to
+ *    the engineer at the head of the train the EOT ID.
+ * 2. The engineer inputs the 5-digit EOT ID into the HOTD.
+ * 3. The railman pushes the TEST button on the EOTD, which broadcasts
+ *    an ARM message.
+ * 4. The engineer at the head of the train has 5 seconds to press the
+ *    ARM button to confirm pairing.
+ * Sources:
+ * - https://www.youtube.com/watch?v=UI4a9ygz_pI&t=316
+ * - https://vimeo.com/groups/310557/videos/124589083
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -588,10 +609,10 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
       // timeout from recv, no message received
       switch (state) {
       case EOT_IDLE:
-        printf("EOT_IDLE: waiting for user to push ARM button\n");
+        printf("EOT_IDLE: waiting for user to push TEST button\n");
         printf("Options:\n");
-        printf("  1: Push ARM button to start pairing\n");
-        printf("  2: Enter legacy mode (hold ARM button for 5 seconds) (ID: %05u)\n", unit_id);
+        printf("  1: Push TEST button to start pairing\n");
+        printf("  2: Enter legacy mode (hold TEST button for 5 seconds) (ID: %05u)\n", unit_id);
         printf("Enter choice: ");
         scanf("%d", &choice);
         while (getchar() != '\n'); // clear input buffer
@@ -649,7 +670,7 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
           char buf[16];
           if (read(STDIN_FILENO, buf, sizeof(buf)) > 0) {
-            printf("Pressed enter (ARM button), exiting legacy mode and returning to idle state...\n");
+            printf("Pressed enter (TEST button), exiting legacy mode and returning to idle state...\n");
             state = EOT_IDLE;
           }
           fcntl(STDIN_FILENO, F_SETFL, flags);
@@ -738,7 +759,7 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           conn.pin = compute_pin(conn.eot_keys.public, conn.hot_keys.public, &conn.eot_nonce, &conn.hot_nonce);
           compute_shared_secret(conn.eot_keys.private, conn.hot_keys.public, conn.shared_secret);
           printf("EOT: received HOT nonce and verified commitment. PIN is %05u\n", conn.pin);
-          printf("Please enter the PIN in the HOT and press the ARM button once confirmed.\n");
+          printf("Please enter the PIN in the HOT and press the TEST button once confirmed.\n");
           wait_for_arm_button_press();
           printf("Pairing successful! Press enter at any time to disconnect and return to waiting for advertisement.\n");
           state = EOT_PAIRED;
