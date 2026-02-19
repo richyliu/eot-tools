@@ -15,7 +15,7 @@ Use `make` to build the main executable. Use `./main eot` or `./main hot` to run
 
 ## Testing
 
-Testing is still WIP.
+To test on Unix machines, use the test_orchestrator.py script. Specifically, run `./test_orchestrator.py full_pairing` to run a single test or `./test_orchestrator.py all` to run all tests (slow, takes up to 60 seconds).
 
 ## File Structure
 
@@ -24,9 +24,7 @@ secure_protocol/
 ├── main.c              # Entry point for C implementation
 ├── devices.c           # C device implementations
 ├── devices.h           # C header file
-├── devices.py          # Python simulation
 ├── Makefile            # Build configuration
-├── requirements.txt    # Python dependencies
 ├── micro-ecc/          # ECC library (third-party)
 └── sha256/             # SHA256 library (third-party)
 ```

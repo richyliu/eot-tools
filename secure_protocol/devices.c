@@ -19,20 +19,16 @@
  * - https://vimeo.com/groups/310557/videos/124589083
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <errno.h>
-#include <time.h>
+#include "ext_utils.h"
 
 #include "micro-ecc/uECC.h"
 #include "sha256/sha256.h"
 
 #include "devices.h"
+#include "comm.h"
+#include "ext_timer.h"
+#include "ext_io.h"
+#include "ext_random.h"
 
 #define EOT_TO_HOT_SOCKET_PATH "/tmp/eot_to_hot.sock"
 #define HOT_TO_EOT_SOCKET_PATH "/tmp/hot_to_eot.sock"
@@ -136,9 +132,7 @@ typedef uint32_t unit_id_t;
 
 typedef struct {
   uint32_t timeout_ms;
-  int send_fd;
-  int recv_fd;
-  struct sockaddr_un send_addr;
+  comm_handle_t *comm_h;
 } communicator_t;
 
 typedef struct {
@@ -154,27 +148,24 @@ typedef struct {
   msg_ctr_t ctr; // message counter for replay protection
 } conn_info_t;
 
-typedef struct timespec timer_t;
+// Use ext_timer_t from ext_timer.h
+typedef ext_timer_t timer_t;
 
-void timer_now(timer_t *t) {
-  clock_gettime(CLOCK_MONOTONIC, t);
+static inline void timer_now(timer_t *t) {
+  ext_timer_now(t);
 }
 
-int timer_diff_ms(const timer_t *end, const timer_t *start) {
-  return (end->tv_sec - start->tv_sec) * 1000 + (end->tv_nsec - start->tv_nsec) / 1000000;
+static inline int timer_diff_ms(const timer_t *end, const timer_t *start) {
+  return ext_timer_diff_ms(end, start);
 }
 
 
 void sha256(const uint8_t *data, size_t len, uint8_t *hash_out) {
-  /* printf("SHA256 input (len=%zu): ", len); for (size_t i = 0; i < len; i++) printf("%02x", data[i]); printf("\n"); */
-
   struct sha256_buff buff;
   sha256_init(&buff);
   sha256_update(&buff, data, len);
   sha256_finalize(&buff);
   sha256_read(&buff, hash_out);
-
-  /* printf("SHA256 output: "); for (size_t i = 0; i < SHA256_SIZE; i++) printf("%02x", hash_out[i]); printf("\n"); */
 }
 
 /**
@@ -189,9 +180,6 @@ int generate_keypair(keypair_t *keypair) {
 
 int compute_shared_secret(const uint8_t *private_key, const uint8_t *peer_public_key, uint8_t *shared_secret) {
   int ret = uECC_shared_secret(peer_public_key, private_key, shared_secret, ECC_CURVE);
-
-  /* printf("Computed shared secret: "); for (size_t i = 0; i < SHARED_SECRET_SIZE; i++) printf("%02x", shared_secret[i]); printf("\n"); */
-
   return ret;
 }
 
@@ -208,8 +196,8 @@ int sign_message(const uint8_t *shared_secret, const uint8_t *message, size_t me
   uint8_t i_key[SHA256_SIZE];
   uint8_t o_key[SHA256_SIZE];
   // Prepare inner and outer keys for HMAC
-  memset(i_key, 0x36, SHA256_SIZE);
-  memset(o_key, 0x5c, SHA256_SIZE);
+  ext_memset(i_key, 0x36, SHA256_SIZE);
+  ext_memset(o_key, 0x5c, SHA256_SIZE);
   for (size_t i = 0; i < SHARED_SECRET_SIZE; i++) {
     i_key[i] ^= shared_secret[i];
     o_key[i] ^= shared_secret[i];
@@ -230,24 +218,7 @@ int sign_message(const uint8_t *shared_secret, const uint8_t *message, size_t me
   sha256_finalize(&buff);
   sha256_read(&buff, hash);
 
-  memcpy(signature, hash, SIGNATURE_SIZE > SHA256_SIZE ? SHA256_SIZE : SIGNATURE_SIZE);
-
-  /* printf("Message (first 8 bytes or less): "); */
-  /* for (size_t i = 0; i < (message_len < 8 ? message_len : 8); i++) { */
-  /*   printf("%02x", message[i]); */
-  /* } */
-  /* if (message_len > 8) { */
-  /*   printf("..."); */
-  /* } */
-  /* printf("\nShared secret: "); */
-  /* for (size_t i = 0; i < SHARED_SECRET_SIZE; i++) { */
-  /*   printf("%02x", shared_secret[i]); */
-  /* } */
-  /* printf("\nSignature: "); */
-  /* for (size_t i = 0; i < SIGNATURE_SIZE; i++) { */
-  /*   printf("%02x", signature[i]); */
-  /* } */
-  /* printf("\n"); */
+  ext_memcpy(signature, hash, SIGNATURE_SIZE > SHA256_SIZE ? SHA256_SIZE : SIGNATURE_SIZE);
 
   return 1;
 }
@@ -266,7 +237,7 @@ int verify_signature(const uint8_t *shared_secret, const uint8_t *message, size_
   if (!sign_message(shared_secret, message, message_len, computed_signature)) {
     return 0;
   }
-  return memcmp(computed_signature, signature, SIGNATURE_SIZE) == 0;
+  return ext_memcmp(computed_signature, signature, SIGNATURE_SIZE) == 0;
 }
 
 /**
@@ -289,7 +260,7 @@ void create_commitment(const nonce_t *nonce, commitment_t *commitment) {
 int verify_commitment(const nonce_t *nonce, const commitment_t *commitment) {
   commitment_t computed_commitment;
   create_commitment(nonce, &computed_commitment);
-  return memcmp(computed_commitment.data, commitment->data, COMMITMENT_SIZE) == 0;
+  return ext_memcmp(computed_commitment.data, commitment->data, COMMITMENT_SIZE) == 0;
 }
 
 void compress_pubkey(const uint8_t *pubkey, uint8_t *compressed) {
@@ -299,44 +270,34 @@ void compress_pubkey(const uint8_t *pubkey, uint8_t *compressed) {
 int decompress_pubkey(const uint8_t *compressed, uint8_t *pubkey) {
   uECC_decompress(compressed, pubkey, ECC_CURVE);
   if (!uECC_valid_public_key(pubkey, ECC_CURVE)) {
-    printf("Invalid public key after decompression\n");
+    ext_io_printf("Invalid public key after decompression\n");
     return 0;
   }
   return 1;
 }
 
 /**
- * Generate a random nonce.
+ * Generate a random nonce using the ext_random abstraction.
  * 
  * @param nonce Pointer to the nonce_t struct to hold the generated nonce.
  */
 void generate_nonce(nonce_t *nonce) {
-  int fd = open("/dev/urandom", O_RDONLY);
-  if (fd < 0) {
-    perror("open /dev/urandom");
-    exit(EXIT_FAILURE);
+  if (ext_random_bytes(nonce->data, NONCE_SIZE) != 0) {
+    ext_io_eprintf("Failed to generate random nonce\n");
+    ext_exit(1);
   }
-  if (read(fd, nonce->data, NONCE_SIZE) != NONCE_SIZE) {
-    perror("read /dev/urandom");
-    close(fd);
-    exit(EXIT_FAILURE);
-  }
-  close(fd);
 }
 
+/**
+ * Generate a random session ID using the ext_random abstraction.
+ * @return Random session ID
+ */
 session_id_t generate_session_id() {
   session_id_t session_id;
-  int fd = open("/dev/urandom", O_RDONLY);
-  if (fd < 0) {
-    perror("open /dev/urandom");
-    exit(EXIT_FAILURE);
+  if (ext_random_bytes((uint8_t *)&session_id, sizeof(session_id)) != 0) {
+    ext_io_eprintf("Failed to generate random session ID\n");
+    ext_exit(1);
   }
-  if (read(fd, &session_id, sizeof(session_id)) != sizeof(session_id)) {
-    perror("read /dev/urandom");
-    close(fd);
-    exit(EXIT_FAILURE);
-  }
-  close(fd);
   return session_id;
 }
 
@@ -351,10 +312,10 @@ session_id_t generate_session_id() {
 pin_t compute_pin(const uint8_t *eot_pubkey, const uint8_t *hot_pubkey,
                   const nonce_t *eot_nonce, const nonce_t *hot_nonce) {
   uint8_t data[PUBKEY_SIZE * 2 + NONCE_SIZE * 2];
-  memcpy(data, eot_pubkey, PUBKEY_SIZE);
-  memcpy(data + PUBKEY_SIZE, hot_pubkey, PUBKEY_SIZE);
-  memcpy(data + PUBKEY_SIZE * 2, eot_nonce->data, NONCE_SIZE);
-  memcpy(data + PUBKEY_SIZE * 2 + NONCE_SIZE, hot_nonce->data, NONCE_SIZE);
+  ext_memcpy(data, eot_pubkey, PUBKEY_SIZE);
+  ext_memcpy(data + PUBKEY_SIZE, hot_pubkey, PUBKEY_SIZE);
+  ext_memcpy(data + PUBKEY_SIZE * 2, eot_nonce->data, NONCE_SIZE);
+  ext_memcpy(data + PUBKEY_SIZE * 2 + NONCE_SIZE, hot_nonce->data, NONCE_SIZE);
   uint8_t hash[SHA256_SIZE];
   sha256(data, sizeof(data), hash);
   // take first 4 bytes of hash, convert to integer, mod 100000 to get 5-digit PIN
@@ -374,51 +335,50 @@ void comm_send(communicator_t* comm,
   pkt_ctr++;
   for (int i = 0; i < sizeof(pkt_dropped)/sizeof(pkt_dropped[0]); i++) {
     if (pkt_dropped[i] == pkt_ctr) {
-      printf("[WARN] dropping packet %d for testing\n", pkt_ctr);
+      ext_io_printf("[WARN] dropping packet %d for testing\n", pkt_ctr);
       return;
     }
   }
 
   size_t total_len = sizeof(session_id_t) + sizeof(msg_type_t) + msg_len;
   if (total_len > MAX_PKT_LEN) {
-    fprintf(stderr, "Message too long to send (%zu bytes)\n", total_len);
-    exit(EXIT_FAILURE);
+    ext_io_eprintf("Message too long to send (%zu bytes)\n", total_len);
+    ext_exit(1);
   }
   uint8_t buffer[MAX_PKT_LEN];
 
-  memcpy(buffer, &session_id, sizeof(session_id_t));
-  memcpy(buffer + sizeof(session_id_t), &msg_type, sizeof(msg_type_t));
-  memcpy(buffer + sizeof(session_id_t) + sizeof(msg_type_t), msg, msg_len);
+  ext_memcpy(buffer, &session_id, sizeof(session_id_t));
+  ext_memcpy(buffer + sizeof(session_id_t), &msg_type, sizeof(msg_type_t));
+  ext_memcpy(buffer + sizeof(session_id_t) + sizeof(msg_type_t), msg, msg_len);
 
   if (shared_secret != NULL) {
     uint8_t signature[SIGNATURE_SIZE];
     if (!sign_message(shared_secret, buffer, total_len, signature)) {
-      fprintf(stderr, "Failed to sign message\n");
-      exit(EXIT_FAILURE);
+      ext_io_eprintf("Failed to sign message\n");
+      ext_exit(1);
     }
     // append signature to the end of the message
     if (total_len + SIGNATURE_SIZE > MAX_PKT_LEN) {
-      fprintf(stderr, "Message too long to send with signature (%zu bytes)\n", total_len + SIGNATURE_SIZE);
-      exit(EXIT_FAILURE);
+      ext_io_eprintf("Message too long to send with signature (%zu bytes)\n", total_len + SIGNATURE_SIZE);
+      ext_exit(1);
     }
-    memcpy(buffer + total_len, signature, SIGNATURE_SIZE);
+    ext_memcpy(buffer + total_len, signature, SIGNATURE_SIZE);
     total_len += SIGNATURE_SIZE;
   }
 
-  printf("[INFO] sending message of length %zu (session_id=%u, msg_type=%d)", total_len, session_id, msg_type);
-  fflush(stdout);
+  ext_io_printf("[INFO] sending message of length %zu (session_id=%u, msg_type=%d)", total_len, session_id, msg_type);
+  ext_io_flush();
   // simulate a packet delay in sending
   for (int i = 0; i < total_len / 5; i++) {
-    usleep(5 * PACKET_SEND_DELAY_MS_PER_BYTE * 1000);
-    printf(".");
-    fflush(stdout);
+    ext_timer_sleep_us(5 * PACKET_SEND_DELAY_MS_PER_BYTE * 1000);
+    ext_io_putc('.');
+    ext_io_flush();
   }
-  printf(" sent\n");
+  ext_io_puts(" sent\n");
 
-  if (sendto(comm->send_fd, buffer, total_len, 0,
-             (struct sockaddr*)&comm->send_addr, sizeof(comm->send_addr)) != total_len) {
-    perror("sendto");
-    exit(EXIT_FAILURE);
+  if (comm_send_raw(comm->comm_h, buffer, total_len) != (ssize_t)total_len) {
+    ext_io_eprintf("Failed to send message\n");
+    ext_exit(1);
   }
 }
 
@@ -427,22 +387,21 @@ void comm_send_legacy(communicator_t* comm,
                       const uint8_t *msg,
                       const size_t msg_len) {
   uint32_t legacy_header;
-  memcpy(&legacy_header, "OLD!", 4);
+  ext_memcpy(&legacy_header, "OLD!", 4);
   size_t total_len = sizeof(legacy_header) + sizeof(unit_id_t) + msg_len;
   if (total_len > MAX_PKT_LEN) {
-    fprintf(stderr, "Message too long to send (%zu bytes)\n", total_len);
-    exit(EXIT_FAILURE);
+    ext_io_eprintf("Message too long to send (%zu bytes)\n");
+    ext_exit(1);
   }
   uint8_t buffer[MAX_PKT_LEN];
-  memcpy(buffer, &legacy_header, sizeof(legacy_header));
-  memcpy(buffer + sizeof(legacy_header), &unit_id, sizeof(unit_id_t));
-  memcpy(buffer + sizeof(legacy_header) + sizeof(unit_id_t), msg, msg_len);
-  if (sendto(comm->send_fd, buffer, total_len, 0,
-             (struct sockaddr*)&comm->send_addr, sizeof(comm->send_addr)) != total_len) {
-    perror("sendto");
-    exit(EXIT_FAILURE);
+  ext_memcpy(buffer, &legacy_header, sizeof(legacy_header));
+  ext_memcpy(buffer + sizeof(legacy_header), &unit_id, sizeof(unit_id_t));
+  ext_memcpy(buffer + sizeof(legacy_header) + sizeof(unit_id_t), msg, msg_len);
+  if (comm_send_raw(comm->comm_h, buffer, total_len) != (ssize_t)total_len) {
+    ext_io_eprintf("Failed to send legacy message\n");
+    ext_exit(1);
   }
-  printf("sent legacy message of length %zu\n", total_len);
+  ext_io_printf("sent legacy message of length %zu\n", total_len);
 }
 
 // returns -1 on timeout, -2 on signature failure, or length of received message
@@ -457,28 +416,28 @@ ssize_t comm_recv(communicator_t* comm,
   uint8_t buffer[MAX_PKT_LEN];
   size_t header_len = sizeof(session_id_t) + sizeof(msg_type_t);
 
-  ssize_t recv_len = recvfrom(comm->recv_fd, buffer, sizeof(buffer), 0, NULL, NULL);
-  if (recv_len < 0) {
-    if (recv_len == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-      // timeout
-      return -1;
-    }
-    perror("recvfrom");
-    exit(EXIT_FAILURE);
+  ssize_t recv_len = comm_recv_raw(comm->comm_h, buffer, sizeof(buffer));
+  if (recv_len == -1) {
+    // timeout
+    return -1;
+  }
+  if (recv_len == -2) {
+    ext_io_eprintf("IPC receive error\n");
+    ext_exit(1);
   }
 
-  if (recv_len >= 4 && memcmp(buffer, "OLD!", 4) == 0) {
+  if (recv_len >= 4 && ext_memcmp(buffer, "OLD!", 4) == 0) {
     // legacy message must include the 4-byte header and unit_id, although we keep unit_id as part of msg
     if (recv_len < 4 + sizeof(unit_id_t)) {
-      fprintf(stderr, "Received legacy message too short (%zd bytes)\n", recv_len);
+      ext_io_eprintf("Received legacy message too short (%zd bytes)\n", recv_len);
       return -2;
     }
     size_t payload_len = recv_len - 4;
     if (payload_len > max_msg_len) {
-      fprintf(stderr, "Received legacy message too long (%zu bytes)\n", payload_len);
-      exit(EXIT_FAILURE);
+      ext_io_eprintf("Received legacy message too long (%zu bytes)\n", payload_len);
+      ext_exit(1);
     }
-    memcpy(msg, buffer + 4, payload_len);
+    ext_memcpy(msg, buffer + 4, payload_len);
     return -((ssize_t)payload_len); // negative length indicates legacy message
   }
 
@@ -487,26 +446,26 @@ ssize_t comm_recv(communicator_t* comm,
   if (shared_secret != NULL) {
     // verify signature
     if (recv_len < header_len + SIGNATURE_SIZE) {
-      fprintf(stderr, "Received message too short for signature (data: %zd bytes)\n", recv_len);
+      ext_io_eprintf("Received message too short for signature (data: %zd bytes)\n", recv_len);
       return -2;
     }
     uint8_t signature[SIGNATURE_SIZE];
-    memcpy(signature, buffer + recv_len - SIGNATURE_SIZE, SIGNATURE_SIZE);
+    ext_memcpy(signature, buffer + recv_len - SIGNATURE_SIZE, SIGNATURE_SIZE);
     if (!verify_signature(shared_secret, buffer, recv_len - SIGNATURE_SIZE, signature)) {
-      fprintf(stderr, "Signature verification failed\n");
+      ext_io_eprintf("Signature verification failed\n");
       return -2;
     }
     payload_len -= SIGNATURE_SIZE;
   }
 
   if (payload_len > max_msg_len) {
-    fprintf(stderr, "Received message too long (data: %zu bytes, total: %zd bytes)\n", payload_len, recv_len);
-    exit(EXIT_FAILURE);
+    ext_io_eprintf("Received message too long (data: %zu bytes, total: %zd bytes)\n", payload_len, recv_len);
+    ext_exit(1);
   }
 
-  memcpy(session_id, buffer, sizeof(session_id_t));
-  memcpy(msg_type, buffer + sizeof(session_id_t), sizeof(msg_type_t));
-  memcpy(msg, buffer + header_len, payload_len);
+  ext_memcpy(session_id, buffer, sizeof(session_id_t));
+  ext_memcpy(msg_type, buffer + sizeof(session_id_t), sizeof(msg_type_t));
+  ext_memcpy(msg, buffer + header_len, payload_len);
 
   return payload_len;
 }
@@ -528,27 +487,23 @@ void get_eot_status(eot_status_t *status) {
 }
 
 void display_eot_status(eot_status_t *status) {
-  time_t now;
-  char buf[26];
-  time(&now);
-  strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", localtime(&now));
-
-  printf("[%s] EOT Status:\n", buf);
-  printf("  Battery Condition: %u\n", status->batt_cond);
-  printf("  Pressure: %u\n", status->pressure);
-  printf("  Battery Charge Used: %u\n", status->batt_charge_used);
-  printf("  Valve Circuit Operational: %u\n", status->valve_circuit_operational);
-  printf("  Confirmation Indicator: %u\n", status->confirmation_indicator);
-  printf("  Turbine Status: %u\n", status->turbine_status);
-  printf("  Motion Detection: %u\n", status->motion_detection);
-  printf("  Marker Light Battery Weak: %u\n", status->marker_light_battery_weak);
-  printf("  Marker Light Status: %u\n", status->marker_light_status);
-  printf("\n");
+  // Simplified display without using time functions
+  ext_io_puts("[EOT Status]:\n");
+  ext_io_printf("  Battery Condition: %u\n", status->batt_cond);
+  ext_io_printf("  Pressure: %u\n", status->pressure);
+  ext_io_printf("  Battery Charge Used: %u\n", status->batt_charge_used);
+  ext_io_printf("  Valve Circuit Operational: %u\n", status->valve_circuit_operational);
+  ext_io_printf("  Confirmation Indicator: %u\n", status->confirmation_indicator);
+  ext_io_printf("  Turbine Status: %u\n", status->turbine_status);
+  ext_io_printf("  Motion Detection: %u\n", status->motion_detection);
+  ext_io_printf("  Marker Light Battery Weak: %u\n", status->marker_light_battery_weak);
+  ext_io_printf("  Marker Light Status: %u\n", status->marker_light_status);
+  ext_io_puts("\n");
 }
 
 void eot_emergency_brake() {
   // In a real implementation, trigger the emergency brake mechanism
-  printf("EOT: Emergency brake activated!\n");
+  ext_io_puts("EOT: Emergency brake activated!\n");
 }
 
 /**
@@ -557,31 +512,27 @@ void eot_emergency_brake() {
  */
 void wait_for_arm_button_press() {
   // clear any existing input
-  int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
-  fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
-  char buf[16];
-  while (read(STDIN_FILENO, buf, sizeof(buf)) > 0);
-  fcntl(STDIN_FILENO, F_SETFL, flags);
+  ext_io_clear_input();
   
-  printf("Press enter to simulate ARM button press...\n");
-  getchar();
+  ext_io_puts("Press enter to simulate ARM button press...\n");
+  ext_io_getc();
 }
 
 void eot_handle_legacy_message(const uint8_t *msg, size_t msg_len) {
   // In a real implementation, handle legacy messages appropriately
-  printf("EOT: Received legacy message (not implemented)\n");
+  ext_io_puts("EOT: Received legacy message (not implemented)\n");
 }
 
 void hot_handle_legacy_message(const uint8_t *msg, size_t msg_len) {
   // In a real implementation, handle legacy messages appropriately
-  printf("HOT: Received legacy message (not implemented)\n");
+  ext_io_puts("HOT: Received legacy message (not implemented)\n");
 }
 
 void eot_run(communicator_t *comm, unit_id_t unit_id) {
   // EOT main loop
 
   conn_info_t conn; // current connection info
-  memset(&conn, 0, sizeof(conn));
+  ext_memset(&conn, 0, sizeof(conn));
   session_id_t recved_session_id = 0;
   enum eot_state state = EOT_IDLE;
   uint8_t msg[MAX_MSG_LEN];
@@ -609,71 +560,69 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
       // timeout from recv, no message received
       switch (state) {
       case EOT_IDLE:
-        printf("EOT_IDLE: waiting for user to push TEST button\n");
-        printf("Options:\n");
-        printf("  1: Push TEST button to start pairing\n");
-        printf("  2: Enter legacy mode (hold TEST button for 5 seconds) (ID: %05u)\n", unit_id);
-        printf("Enter choice: ");
-        scanf("%d", &choice);
-        while (getchar() != '\n'); // clear input buffer
+        ext_io_puts("EOT_IDLE: waiting for user to push TEST button\n");
+        ext_io_puts("Options:\n");
+        ext_io_puts("  1: Push TEST button to start pairing\n");
+        ext_io_printf("  2: Enter legacy mode (hold TEST button for 5 seconds) (ID: %05u)\n", unit_id);
+        ext_io_puts("Enter choice: ");
+        ext_io_flush();
+        ext_io_scan_int(&choice);
         if (choice == 1) {
-          printf("Button pressed, waiting for HOT advertisement...\n");
+          ext_io_puts("Button pressed, waiting for HOT advertisement...\n");
           timer_now(&adv_start);
           state = EOT_WAIT_ADV;
         } else if (choice == 2) {
-          printf("Entering legacy mode and sending legacy ARM command\n");
+          ext_io_puts("Entering legacy mode and sending legacy ARM command\n");
           state = EOT_LEGACY;
           // also send protocol upgrade request to prevent pairing in
           // legacy mode if both devices support the new protocol
           comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t*)&unit_id, sizeof(unit_id), NULL);
           comm_send_legacy(comm, unit_id, (uint8_t*)"ARM", 3);
-          printf("Press enter to exit legacy mode back to idle state...\n");
+          ext_io_puts("Press enter to exit legacy mode back to idle state...\n");
         } else {
-          printf("Invalid choice, staying in idle state.\n");
+          ext_io_puts("Invalid choice, staying in idle state.\n");
         }
         break;
       case EOT_WAIT_ADV:
         if (timer_diff_ms(&now, &adv_start) >= EOT_WAIT_ADV_TIMEOUT_MS) {
-          printf("EOT: Waiting for HOT timed out. Returning to idle state.\n");
+          ext_io_puts("EOT: Waiting for HOT timed out. Returning to idle state.\n");
           state = EOT_IDLE;
-          memset(&conn, 0, sizeof(conn));
+          ext_memset(&conn, 0, sizeof(conn));
         }
         break;
       case EOT_KEY_EX_1:
       case EOT_KEY_EX_2:
         if (timer_diff_ms(&now, &pairing_start) >= PAIRING_TIMEOUT) {
-          printf("EOT: Pairing timed out. Returning to idle state.\n");
+          ext_io_puts("EOT: Pairing timed out. Returning to idle state.\n");
           state = EOT_IDLE;
-          memset(&conn, 0, sizeof(conn));
+          ext_memset(&conn, 0, sizeof(conn));
         }
         break;
       case EOT_PAIRED:
         // TODO: periodically send status updates
         // check for user input (non-blocking) to disconnect
         {
-          int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
-          fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+          ext_io_set_nonblocking(1);
           char buf[16];
-          if (read(STDIN_FILENO, buf, sizeof(buf)) > 0) {
-            printf("Pressed enter (ARM button), disconnecting and searching for new HOT...\n");
+          if (ext_io_getline(buf, sizeof(buf)) >= 0) {
+            ext_io_puts("Pressed enter (ARM button), disconnecting and searching for new HOT...\n");
             timer_now(&adv_start);
             state = EOT_WAIT_ADV;
-            memset(&conn, 0, sizeof(conn));
+            ext_memset(&conn, 0, sizeof(conn));
           }
-          fcntl(STDIN_FILENO, F_SETFL, flags);
+          ext_io_set_nonblocking(0);
         }
         break;
       case EOT_LEGACY:
         // check for user input (non-blocking) to exit legacy mode
         {
-          int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
-          fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
+          ext_io_set_nonblocking(1);
           char buf[16];
-          if (read(STDIN_FILENO, buf, sizeof(buf)) > 0) {
-            printf("Pressed enter (TEST button), exiting legacy mode and returning to idle state...\n");
+          if (ext_io_getline(buf, sizeof(buf)) >= 0) {
+            ext_io_puts("Pressed enter (TEST button), exiting legacy mode and returning to idle state...\n");
             state = EOT_IDLE;
           }
-          fcntl(STDIN_FILENO, F_SETFL, flags);
+          ext_io_set_nonblocking(0);
         }
         break;
       default:
@@ -681,45 +630,44 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
       }
     } else if (recv_len == -2) {
       // signature verification failed
-      printf("EOT: received message with invalid signature, ignoring.\n");
+      ext_io_puts("EOT: received message with invalid signature, ignoring.\n");
     } else if (recv_len < 0) {
       // legacy message received
       if (state != EOT_LEGACY) {
-        printf("EOT: received legacy message while not in legacy state, ignoring.\n");
+        ext_io_puts("EOT: received legacy message while not in legacy state, ignoring.\n");
         continue;
       }
-      if (-recv_len < sizeof(unit_id_t)) {
-        fprintf(stderr, "EOT: received legacy message too short (%zd bytes), ignoring.\n", -recv_len);
+      if (-recv_len < (ssize_t)sizeof(unit_id_t)) {
+        ext_io_eprintf("EOT: received legacy message too short (%zd bytes), ignoring.\n", -recv_len);
         continue;
       }
       unit_id_t legacy_unit_id;
-      memcpy(&legacy_unit_id, msg, sizeof(unit_id_t));
+      ext_memcpy(&legacy_unit_id, msg, sizeof(unit_id_t));
       eot_handle_legacy_message(msg + sizeof(unit_id_t), -recv_len - sizeof(unit_id_t));
     } else {
-      /* printf("received msg type=%d session_id=%u len=%zu state=%d\n", msg_type, recved_session_id, recv_len, state); */
       switch (state) {
       case EOT_WAIT_ADV:
         if (msg_type == HOT_MSG_ADV) {
           // received advertisement from HOT
-          printf("EOT: received advertisement from HOT, initiating connection...\n");
+          ext_io_puts("EOT: received advertisement from HOT, initiating connection...\n");
 
           timer_now(&pairing_start);
           // reset connection info from previous session
-          memset(&conn, 0, sizeof(conn));
+          ext_memset(&conn, 0, sizeof(conn));
 
-          printf("EOT: establishing connection with ID %u\n", recved_session_id);
+          ext_io_printf("EOT: establishing connection with ID %u\n", recved_session_id);
           conn.session_id = recved_session_id;
 
           // generate our keypair
           if (!generate_keypair(&conn.eot_keys)) {
-            fprintf(stderr, "Failed to generate EOT keypair\n");
-            exit(EXIT_FAILURE);
+            ext_io_eprintf("Failed to generate EOT keypair\n");
+            ext_exit(1);
           }
           // send our public key to HOT
           uint8_t compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
           compress_pubkey(conn.eot_keys.public, compressed_pubkey);
           comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_PUBKEY, compressed_pubkey, sizeof(compressed_pubkey), NULL);
-          printf("EOT: sent public key to HOT, waiting for their pubkey and commitment...\n");
+          ext_io_puts("EOT: sent public key to HOT, waiting for their pubkey and commitment...\n");
           state = EOT_KEY_EX_1;
         }
         break;
@@ -727,69 +675,69 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
         if (msg_type == HOT_MSG_PUBKEY_AND_COMMIT && recved_session_id == conn.session_id && recv_len == COMPRESSED_PUBKEY_SIZE + COMMITMENT_SIZE) {
           // received HOT's public key and commitment
           uint8_t hot_compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
-          memcpy(hot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
-          memcpy(conn.hot_commitment.data, msg + COMPRESSED_PUBKEY_SIZE, COMMITMENT_SIZE);
+          ext_memcpy(hot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
+          ext_memcpy(conn.hot_commitment.data, msg + COMPRESSED_PUBKEY_SIZE, COMMITMENT_SIZE);
           if (!decompress_pubkey(hot_compressed_pubkey, conn.hot_keys.public)) {
-            printf("EOT: Invalid HOT public key received, aborting connection.\n");
+            ext_io_puts("EOT: Invalid HOT public key received, aborting connection.\n");
             state = EOT_IDLE;
             break;
           }
-          printf("EOT: received HOT pubkey and commitment, generating nonce...\n");
+          ext_io_puts("EOT: received HOT pubkey and commitment, generating nonce...\n");
           // generate our nonce
           generate_nonce(&conn.eot_nonce);
           // send our nonce to HOT
           comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_NONCE, conn.eot_nonce.data, sizeof(conn.eot_nonce.data), NULL);
-          printf("EOT: sent nonce to HOT, waiting for their nonce...\n");
+          ext_io_puts("EOT: sent nonce to HOT, waiting for their nonce...\n");
           state = EOT_KEY_EX_2;
         }
         break;
       case EOT_KEY_EX_2:
         if (msg_type == HOT_MSG_NONCE && recved_session_id == conn.session_id && recv_len == NONCE_SIZE) {
           // received HOT's nonce
-          memcpy(conn.hot_nonce.data, msg, NONCE_SIZE);
+          ext_memcpy(conn.hot_nonce.data, msg, NONCE_SIZE);
           // verify HOT's commitment
           if (!verify_commitment(&conn.hot_nonce, &conn.hot_commitment)) {
-            fprintf(stderr, "EOT: Commitment verification failed! Aborting.\n");
+            ext_io_eprintf("EOT: Commitment verification failed! Aborting.\n");
             state = EOT_IDLE;
             break;
           }
           timer_now(&now);
-          printf("EOT: pairing took %d ms\n", timer_diff_ms(&now, &pairing_start));
+          ext_io_printf("EOT: pairing took %d ms\n", timer_diff_ms(&now, &pairing_start));
           // compute PIN
           conn.pin = compute_pin(conn.eot_keys.public, conn.hot_keys.public, &conn.eot_nonce, &conn.hot_nonce);
           compute_shared_secret(conn.eot_keys.private, conn.hot_keys.public, conn.shared_secret);
-          printf("EOT: received HOT nonce and verified commitment. PIN is %05u\n", conn.pin);
-          printf("Please enter the PIN in the HOT and press the TEST button once confirmed.\n");
+          ext_io_printf("EOT: received HOT nonce and verified commitment. PIN is %05u\n", conn.pin);
+          ext_io_puts("Please enter the PIN in the HOT and press the TEST button once confirmed.\n");
           wait_for_arm_button_press();
-          printf("Pairing successful! Press enter at any time to disconnect and return to waiting for advertisement.\n");
+          ext_io_puts("Pairing successful! Press enter at any time to disconnect and return to waiting for advertisement.\n");
           state = EOT_PAIRED;
         }
         break;
       case EOT_PAIRED:
         if (recved_session_id == conn.session_id) {
           // check message counter for replay protection
-          if (recv_len < sizeof(conn.ctr)) {
-            printf("EOT: received message too short for counter, ignoring.\n");
+          if (recv_len < (ssize_t)sizeof(conn.ctr)) {
+            ext_io_puts("EOT: received message too short for counter, ignoring.\n");
             break;
           }
           msg_ctr_t recv_ctr = *(msg_ctr_t*)msg;
           if (recv_ctr <= conn.ctr) {
-            printf("EOT: received message with old counter (%u <= %u), ignoring.\n", recv_ctr, conn.ctr);
+            ext_io_printf("EOT: received message with old counter (%u <= %u), ignoring.\n", recv_ctr, conn.ctr);
             break;
           }
           conn.ctr = recv_ctr;
           if (msg_type == HOT_MSG_STATUS) {
             get_eot_status(&status);
             comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_STATUS, (uint8_t*)&status, sizeof(status), conn.shared_secret);
-            printf("EOT: sent status update to HOT.\n");
+            ext_io_puts("EOT: sent status update to HOT.\n");
           } else if (msg_type == HOT_MSG_EMERGENCY) {
             eot_emergency_brake();
             comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_EMERGENCY, NULL, 0, conn.shared_secret);
-            printf("EOT: sent emergency brake confirmation to HOT.\n");
+            ext_io_puts("EOT: sent emergency brake confirmation to HOT.\n");
           } else if (msg_type == HOT_MSG_DISCONNECT) {
-            printf("EOT: received disconnect\n");
+            ext_io_puts("EOT: received disconnect\n");
             state = EOT_IDLE;
-            memset(&conn, 0, sizeof(conn));
+            ext_memset(&conn, 0, sizeof(conn));
           }
         }
       default:
@@ -803,7 +751,7 @@ void hot_run(communicator_t *comm) {
   // HOT main loop
 
   conn_info_t conn; // current connection info
-  memset(&conn, 0, sizeof(conn));
+  ext_memset(&conn, 0, sizeof(conn));
   session_id_t recved_session_id = 0;
   enum hot_state state = HOT_IDLE;
   uint8_t msg[MAX_MSG_LEN];
@@ -834,30 +782,30 @@ void hot_run(communicator_t *comm) {
       // timeout from recv, no message received
       switch (state) {
       case HOT_IDLE:
-        printf("HOT_IDLE: waiting for user to push ARM button\n");
-        printf("Options:\n");
-        printf("  -1: Push ARM button to start pairing\n");
-        printf("  <5-digit unit ID>: Enter legacy mode with given unit ID\n");
-        printf("Enter choice: ");
-        scanf("%d", &choice);
-        while (getchar() != '\n'); // clear input buffer
+        ext_io_puts("HOT_IDLE: waiting for user to push ARM button\n");
+        ext_io_puts("Options:\n");
+        ext_io_puts("  -1: Push ARM button to start pairing\n");
+        ext_io_puts("  <5-digit unit ID>: Enter legacy mode with given unit ID\n");
+        ext_io_puts("Enter choice: ");
+        ext_io_flush();
+        ext_io_scan_int(&choice);
         if (choice == -1) {
-          printf("Button pressed, sending advertisement...\n");
+          ext_io_puts("Button pressed, sending advertisement...\n");
           // reset connection info from previous session
-          memset(&conn, 0, sizeof(conn));
+          ext_memset(&conn, 0, sizeof(conn));
           // generate random session_id for this session
           conn.session_id = generate_session_id();
-          printf("session id: %u\n", conn.session_id);
+          ext_io_printf("session id: %u\n", conn.session_id);
           state = HOT_ADV;
         } else if (choice >= 0 && choice <= 99999) {
-          if (recent_upgradable_legacy_unit_id == choice) {
-            printf("Requested to pair in legacy mode with unit ID %05u, but it supports the new protocol. Please use the new protocol to pair.\n", choice);
+          if (recent_upgradable_legacy_unit_id == (unit_id_t)choice) {
+            ext_io_printf("Requested to pair in legacy mode with unit ID %05u, but it supports the new protocol. Please use the new protocol to pair.\n", choice);
           } else {
-            printf("Entering legacy mode with unit ID %05u\n", choice);
+            ext_io_printf("Entering legacy mode with unit ID %05u\n", choice);
             state = HOT_LEGACY;
           }
         } else {
-          printf("Invalid choice, staying in idle state.\n");
+          ext_io_puts("Invalid choice, staying in idle state.\n");
         }
         break;
       case HOT_ADV:
@@ -865,67 +813,67 @@ void hot_run(communicator_t *comm) {
           // send advertisement
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_ADV, NULL, 0, NULL);
           last_adv_time = now;
-          printf("HOT: sent advertisement\n");
+          ext_io_puts("HOT: sent advertisement\n");
         }
         break;
       case HOT_KEY_EX_1:
         if (timer_diff_ms(&now, &pairing_start) >= PAIRING_TIMEOUT) {
-          printf("HOT: Pairing timed out. Returning to idle state.\n");
+          ext_io_puts("HOT: Pairing timed out. Returning to idle state.\n");
           state = HOT_IDLE;
-          memset(&conn, 0, sizeof(conn));
+          ext_memset(&conn, 0, sizeof(conn));
         }
         break;
       case HOT_WAIT_FOR_PIN:
         // In a real implementation, we would wait for user input here
-        printf("HOT: waiting for user to input PIN (expected PIN is %05u)\n", conn.pin);
+        ext_io_printf("HOT: waiting for user to input PIN (expected PIN is %05u)\n", conn.pin);
         for (int i = 0; i < 3; i++) {
-          printf("Enter PIN (attempt %d of 3): ", i + 1);
-          scanf("%u", &input_pin);
-          getchar(); // consume newline
-          printf("You entered: %05u\n", input_pin);
+          ext_io_printf("Enter PIN (attempt %d of 3): ", i + 1);
+          ext_io_flush();
+          ext_io_scan_uint(&input_pin);
+          ext_io_printf("You entered: %05u\n", input_pin);
           if (input_pin == conn.pin) {
-            printf("PIN correct! Pairing successful. Press the ARM button on the EOT to confirm.\n");
+            ext_io_puts("PIN correct! Pairing successful. Press the ARM button on the EOT to confirm.\n");
             state = HOT_PAIRED;
             break;
           } else {
-            printf("Incorrect PIN. Try again.\n");
+            ext_io_puts("Incorrect PIN. Try again.\n");
           }
         }
         if (state != HOT_PAIRED) {
-          printf("Failed to enter correct PIN. Returning to idle state.\n");
+          ext_io_puts("Failed to enter correct PIN. Returning to idle state.\n");
           state = HOT_IDLE;
-          memset(&conn, 0, sizeof(conn));
+          ext_memset(&conn, 0, sizeof(conn));
         }
         break;
       case HOT_PAIRED:
-        printf("Select an option:\n");
-        printf("1. Request status update\n");
-        printf("2. Emergency brake\n");
-        printf("3. Disconnect (ARM button)\n");
-        printf("Enter choice: ");
+        ext_io_puts("Select an option:\n");
+        ext_io_puts("1. Request status update\n");
+        ext_io_puts("2. Emergency brake\n");
+        ext_io_puts("3. Disconnect (ARM button)\n");
+        ext_io_puts("Enter choice: ");
+        ext_io_flush();
         choice = 0;
-        scanf("%d", &choice);
-        getchar(); // consume newline
+        ext_io_scan_int(&choice);
 
         conn.ctr++; // increment message counter
         if (choice == 1) {
           // also send ctr to avoid replay attacks
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_STATUS, (uint8_t*)&conn.ctr, sizeof(conn.ctr), conn.shared_secret);
-          printf("HOT: sent status update request\n");
+          ext_io_puts("HOT: sent status update request\n");
           state = HOT_WAIT_FOR_STATUS;
         } else if (choice == 2) {
           // also send ctr to avoid replay attacks
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_EMERGENCY, (uint8_t*)&conn.ctr, sizeof(conn.ctr), conn.shared_secret);
-          printf("HOT: sent emergency brake request\n");
+          ext_io_puts("HOT: sent emergency brake request\n");
           state = HOT_WAIT_FOR_EMERGENCY;
         } else if (choice == 3) {
           // also send ctr to avoid replay attacks
-          printf("HOT: Disconnecting...\n");
+          ext_io_puts("HOT: Disconnecting...\n");
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_DISCONNECT, (uint8_t*)&conn.ctr, sizeof(conn.ctr), conn.shared_secret);
           state = HOT_IDLE;
-          memset(&conn, 0, sizeof(conn));
+          ext_memset(&conn, 0, sizeof(conn));
         } else {
-          printf("Invalid choice.\n");
+          ext_io_puts("Invalid choice.\n");
         }
         timer_now(&last_transmit_time);
         break;
@@ -936,10 +884,10 @@ void hot_run(communicator_t *comm) {
         if (timer_diff_ms(&now, &last_transmit_time) >= HOT_RETRANSMIT_INTERVAL_MS) {
           if (state == HOT_WAIT_FOR_STATUS) {
             comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_STATUS, (uint8_t*)&conn.ctr, sizeof(conn.ctr), conn.shared_secret);
-            printf("HOT: retransmitted status update request\n");
+            ext_io_puts("HOT: retransmitted status update request\n");
           } else if (state == HOT_WAIT_FOR_EMERGENCY) {
             comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_EMERGENCY, (uint8_t*)&conn.ctr, sizeof(conn.ctr), conn.shared_secret);
-            printf("HOT: retransmitted emergency brake request\n");
+            ext_io_puts("HOT: retransmitted emergency brake request\n");
           }
           last_transmit_time = now;
         }
@@ -949,49 +897,49 @@ void hot_run(communicator_t *comm) {
       }
     } else if (recv_len == -2) {
       // signature verification failed
-      printf("HOT: received message with invalid signature, ignoring.\n");
+      ext_io_puts("HOT: received message with invalid signature, ignoring.\n");
     } else if (recv_len < 0) {
       // legacy message received
       if (state != HOT_LEGACY) {
-        printf("HOT: received legacy message while not in legacy state, ignoring.\n");
+        ext_io_puts("HOT: received legacy message while not in legacy state, ignoring.\n");
         continue;
       }
-      if (-recv_len < sizeof(unit_id_t)) {
-        fprintf(stderr, "HOT: received legacy message too short (%zd bytes), ignoring.\n", -recv_len);
+      if (-recv_len < (ssize_t)sizeof(unit_id_t)) {
+        ext_io_eprintf("HOT: received legacy message too short (%zd bytes), ignoring.\n", -recv_len);
         continue;
       }
       unit_id_t legacy_unit_id;
-      memcpy(&legacy_unit_id, msg, sizeof(unit_id_t));
+      ext_memcpy(&legacy_unit_id, msg, sizeof(unit_id_t));
       if (recent_upgradable_legacy_unit_id != 0 && legacy_unit_id == recent_upgradable_legacy_unit_id) {
-        printf("HOT: received legacy message from recently upgradable unit ID %u, ignoring to prevent downgrade attack.\n", legacy_unit_id);
-      } else if (recv_len > sizeof(unit_id_t) + 3 && memcmp(msg + sizeof(unit_id_t), "ARM", 3) == 0) {
-        printf("HOT: received legacy ARM command from unit ID %u, entering legacy ARMED mode.\n", legacy_unit_id);
+        ext_io_printf("HOT: received legacy message from recently upgradable unit ID %u, ignoring to prevent downgrade attack.\n", legacy_unit_id);
+      } else if ((size_t)-recv_len > sizeof(unit_id_t) + 3 && ext_memcmp(msg + sizeof(unit_id_t), "ARM", 3) == 0) {
+        ext_io_printf("HOT: received legacy ARM command from unit ID %u, entering legacy ARMED mode.\n", legacy_unit_id);
         state = HOT_LEGACY_ARMED;
       } else if (state == HOT_LEGACY_ARMED) {
         hot_handle_legacy_message(msg + sizeof(unit_id_t), -recv_len - sizeof(unit_id_t));
       } else {
-        printf("HOT: received legacy message from unit ID %u while not in legacy state, ignoring.\n", legacy_unit_id);
+        ext_io_printf("HOT: received legacy message from unit ID %u while not in legacy state, ignoring.\n", legacy_unit_id);
       }
     } else {
-      if (msg_type == EOT_MSG_UPGRADE && recv_len == sizeof(unit_id_t)) {
-        memcpy(&recent_upgradable_legacy_unit_id, msg, sizeof(unit_id_t));
-        printf("HOT: received protocol upgrade request from legacy unit ID %u\n", recent_upgradable_legacy_unit_id);
+      if (msg_type == EOT_MSG_UPGRADE && recv_len == (ssize_t)sizeof(unit_id_t)) {
+        ext_memcpy(&recent_upgradable_legacy_unit_id, msg, sizeof(unit_id_t));
+        ext_io_printf("HOT: received protocol upgrade request from legacy unit ID %u\n", recent_upgradable_legacy_unit_id);
       }
       switch (state) {
       case HOT_ADV:
         if (msg_type == EOT_MSG_PUBKEY && recved_session_id == conn.session_id) {
-          printf("HOT: received EOT pubkey, initiating connection...\n");
+          ext_io_puts("HOT: received EOT pubkey, initiating connection...\n");
 
           timer_now(&pairing_start);
           
           uint8_t eot_compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
-          memcpy(eot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
+          ext_memcpy(eot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
           decompress_pubkey(eot_compressed_pubkey, conn.eot_keys.public);
 
           // generate our keypair, nonce, and commitment
           if (!generate_keypair(&conn.hot_keys)) {
-            fprintf(stderr, "Failed to generate HOT keypair\n");
-            exit(EXIT_FAILURE);
+            ext_io_eprintf("Failed to generate HOT keypair\n");
+            ext_exit(1);
           }
           generate_nonce(&conn.hot_nonce);
           create_commitment(&conn.hot_nonce, &conn.hot_commitment);
@@ -999,37 +947,37 @@ void hot_run(communicator_t *comm) {
           uint8_t compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
           compress_pubkey(conn.hot_keys.public, compressed_pubkey);
           uint8_t payload[COMPRESSED_PUBKEY_SIZE + COMMITMENT_SIZE];
-          memcpy(payload, compressed_pubkey, COMPRESSED_PUBKEY_SIZE);
-          memcpy(payload + COMPRESSED_PUBKEY_SIZE, conn.hot_commitment.data, COMMITMENT_SIZE);
+          ext_memcpy(payload, compressed_pubkey, COMPRESSED_PUBKEY_SIZE);
+          ext_memcpy(payload + COMPRESSED_PUBKEY_SIZE, conn.hot_commitment.data, COMMITMENT_SIZE);
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_PUBKEY_AND_COMMIT, payload, sizeof(payload), NULL);
 
-          printf("HOT: sent pubkey and commitment to EOT, waiting for their nonce...\n");
+          ext_io_puts("HOT: sent pubkey and commitment to EOT, waiting for their nonce...\n");
           state = HOT_KEY_EX_1;
         }
         break;
       case HOT_KEY_EX_1:
         if (msg_type == EOT_MSG_NONCE && recved_session_id == conn.session_id && recv_len == NONCE_SIZE) {
-          printf("HOT: received EOT nonce, sending our nonce...\n");
+          ext_io_puts("HOT: received EOT nonce, sending our nonce...\n");
           // can also generate the expected PIN here
-          memcpy(conn.eot_nonce.data, msg, NONCE_SIZE);
+          ext_memcpy(conn.eot_nonce.data, msg, NONCE_SIZE);
           conn.pin = compute_pin(conn.eot_keys.public, conn.hot_keys.public, &conn.eot_nonce, &conn.hot_nonce);
           compute_shared_secret(conn.hot_keys.private, conn.eot_keys.public, conn.shared_secret);
           // send our nonce to EOT
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_NONCE, conn.hot_nonce.data, sizeof(conn.hot_nonce.data), NULL);
-          printf("HOT: sent nonce to EOT, waiting for user to input PIN...\n");
+          ext_io_puts("HOT: sent nonce to EOT, waiting for user to input PIN...\n");
           state = HOT_WAIT_FOR_PIN;
         }
       case HOT_WAIT_FOR_STATUS:
-        if (msg_type == EOT_MSG_STATUS && recved_session_id == conn.session_id && recv_len == sizeof(eot_status_t)) {
+        if (msg_type == EOT_MSG_STATUS && recved_session_id == conn.session_id && recv_len == (ssize_t)sizeof(eot_status_t)) {
           eot_status_t status;
-          memcpy(&status, msg, sizeof(eot_status_t));
+          ext_memcpy(&status, msg, sizeof(eot_status_t));
           display_eot_status(&status);
           state = HOT_PAIRED;
         }
         break;
       case HOT_WAIT_FOR_EMERGENCY:
         if (msg_type == EOT_MSG_EMERGENCY && recved_session_id == conn.session_id) {
-          printf("HOT: received emergency brake confirmation from EOT. %d ms elapsed since last request.\n", timer_diff_ms(&now, &last_transmit_time));
+          ext_io_printf("HOT: received emergency brake confirmation from EOT. %d ms elapsed since last request.\n", timer_diff_ms(&now, &last_transmit_time));
           state = HOT_PAIRED;
         }
         break;
@@ -1045,51 +993,23 @@ void init_communicator(communicator_t *comm,
                          const char *recv_socket_path,
                          const uint32_t timeout_ms) {
   comm->timeout_ms = timeout_ms;
-
-  // create send socket
-  comm->send_fd = socket(AF_UNIX, SOCK_DGRAM, 0);
-  if (comm->send_fd < 0) {
-    perror("socket send");
-    exit(EXIT_FAILURE);
-  }
-
-  memset(&comm->send_addr, 0, sizeof(comm->send_addr));
-  comm->send_addr.sun_family = AF_UNIX;
-  strncpy(comm->send_addr.sun_path, send_socket_path, sizeof(comm->send_addr.sun_path) - 1);
-
-  // create recv socket
-  comm->recv_fd = socket(AF_UNIX, SOCK_DGRAM, 0);
-  if (comm->recv_fd < 0) {
-    perror("socket recv");
-    exit(EXIT_FAILURE);
-  }
-
-  struct sockaddr_un recv_addr;
-  memset(&recv_addr, 0, sizeof(recv_addr));
-  recv_addr.sun_family = AF_UNIX;
-  strncpy(recv_addr.sun_path, recv_socket_path, sizeof(recv_addr.sun_path) - 1);
-
-  unlink(recv_socket_path); // remove existing socket file
-
-  if (bind(comm->recv_fd, (struct sockaddr*)&recv_addr, sizeof(recv_addr)) < 0) {
-    perror("bind recv");
-    exit(EXIT_FAILURE);
-  }
-
-  // set recv timeout
-  struct timeval tv;
-  tv.tv_sec = timeout_ms / 1000;
-  tv.tv_usec = (timeout_ms % 1000) * 1000;
-  if (setsockopt(comm->recv_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
-    perror("setsockopt");
-    exit(EXIT_FAILURE);
+  comm->comm_h = comm_init(send_socket_path, recv_socket_path, timeout_ms);
+  if (!comm->comm_h) {
+    ext_io_eprintf("Failed to initialize communication\n");
+    ext_exit(1);
   }
 }
 
 int eot_main() {
   communicator_t comm;
   unit_id_t sample_unit_id = 12345;
-  printf("EOT starting...\n");
+  
+  // Initialize abstraction layers
+  ext_timer_init();
+  ext_io_init();
+  ext_random_init();
+  
+  ext_io_puts("EOT starting...\n");
   init_communicator(&comm, EOT_TO_HOT_SOCKET_PATH, HOT_TO_EOT_SOCKET_PATH, DEFAULT_TIMEOUT_MS);
   eot_run(&comm, sample_unit_id);
   return 0;
@@ -1097,7 +1017,13 @@ int eot_main() {
 
 int hot_main() {
   communicator_t comm;
-  printf("HOT starting...\n");
+  
+  // Initialize abstraction layers
+  ext_timer_init();
+  ext_io_init();
+  ext_random_init();
+  
+  ext_io_puts("HOT starting...\n");
   init_communicator(&comm, HOT_TO_EOT_SOCKET_PATH, EOT_TO_HOT_SOCKET_PATH, DEFAULT_TIMEOUT_MS);
   hot_run(&comm);
   return 0;
@@ -1106,13 +1032,13 @@ int hot_main() {
 // for testing packet dropping
 void add_drop_packet(int pkt_num) {
   // pkt_num is 1-indexed
-  for (int i = 0; i < sizeof(pkt_dropped)/sizeof(pkt_dropped[0]); i++) {
+  for (size_t i = 0; i < sizeof(pkt_dropped)/sizeof(pkt_dropped[0]); i++) {
     if (pkt_dropped[i] == 0) {
       pkt_dropped[i] = pkt_num;
       return;
     }
   }
 
-  fprintf(stderr, "Too many packets to drop, increase pkt_dropped array size\n");
-  exit(EXIT_FAILURE);
+  ext_io_eprintf("Too many packets to drop, increase pkt_dropped array size\n");
+  ext_exit(1);
 }
