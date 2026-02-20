@@ -5,7 +5,7 @@
 TARGET ?= unix
 
 # Source files (platform-independent)
-CORE_SOURCES = main.c devices.c
+CORE_SOURCES = main.c devices.c crypto.c
 DEPS = micro-ecc/uECC.c sha256/sha256.c
 
 ifeq ($(TARGET),arm)
@@ -23,7 +23,7 @@ ifeq ($(TARGET),arm)
     UECC_FLAGS = -DuECC_OPTIMIZATION_LEVEL=3
     
     # Use ARM stub implementations
-    EXT_SOURCES = comm_arm.c ext_timer_arm.c ext_io_arm.c ext_random_arm.c ext_utils_arm.c arm_support.c
+    EXT_SOURCES = comm_arm.c ext_support_arm.c arm_support.c
     OUTPUT_EOT = eot.elf
     OUTPUT_HOT = hot.elf
     
@@ -33,7 +33,7 @@ else
     CFLAGS = -flto -Os -Wall -DTARGET_UNIX
     LDFLAGS = -flto
     UECC_FLAGS =
-    EXT_SOURCES = comm_socket.c ext_timer.c ext_io.c ext_random.c ext_utils.c
+    EXT_SOURCES = comm_socket.c ext_support.c
     OUTPUT_EOT = eot
     OUTPUT_HOT = hot
 endif

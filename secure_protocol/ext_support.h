@@ -1,11 +1,11 @@
 /**
- * IO abstraction layer for the EOT/HOT protocol.
- * Provides portable input/output using nanoprintf instead of printf.
- * Can be swapped out for bare metal UART implementations at build time.
+ * Support abstraction layer for the EOT/HOT protocol.
+ * Combines IO, timer, random, and utility functions.
+ * Can be swapped out for bare metal implementations at build time.
  */
 
-#ifndef EXT_IO_H_INCLUDED
-#define EXT_IO_H_INCLUDED
+#ifndef EXT_SUPPORT_H_INCLUDED
+#define EXT_SUPPORT_H_INCLUDED
 
 #include <stdint.h>
 #include <stddef.h>
@@ -14,6 +14,51 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* ========== Timer ========== */
+
+/**
+ * Timer type - opaque structure representing a timestamp.
+ * The actual implementation is defined in the .c file.
+ */
+typedef struct ext_timer_s {
+    uint64_t timestamp_ms;
+} ext_timer_t;
+
+/**
+ * Initialize the timer subsystem.
+ * Should be called once before using other timer functions.
+ * @return 0 on success, -1 on error
+ */
+int ext_timer_init(void);
+
+/**
+ * Get the current time.
+ * @param t Pointer to timer struct to fill with current time
+ */
+void ext_timer_now(ext_timer_t *t);
+
+/**
+ * Calculate the difference between two timestamps in milliseconds.
+ * @param end The later time
+ * @param start The earlier time
+ * @return Difference in milliseconds (end - start)
+ */
+int ext_timer_diff_ms(const ext_timer_t *end, const ext_timer_t *start);
+
+/**
+ * Sleep for a specified number of milliseconds.
+ * @param ms Number of milliseconds to sleep
+ */
+void ext_timer_sleep_ms(uint32_t ms);
+
+/**
+ * Sleep for a specified number of microseconds.
+ * @param us Number of microseconds to sleep
+ */
+void ext_timer_sleep_us(uint32_t us);
+
+/* ========== IO ========== */
 
 /**
  * Character output callback function type.
@@ -141,8 +186,75 @@ int ext_io_eprintf(const char *format, ...);
  */
 void ext_exit(int status);
 
+/* ========== Random ========== */
+
+/**
+ * Initialize the randomness subsystem.
+ * Should be called once before using other random functions.
+ * @return 0 on success, -1 on error
+ */
+int ext_random_init(void);
+
+/**
+ * Fill a buffer with random bytes.
+ * @param buffer Buffer to fill with random data
+ * @param len Number of bytes to generate
+ * @return 0 on success, -1 on error
+ */
+int ext_random_bytes(uint8_t *buffer, size_t len);
+
+/**
+ * Generate a random 32-bit unsigned integer.
+ * @return Random 32-bit value
+ */
+uint32_t ext_random_u32(void);
+
+/**
+ * Generate a random value within a range [min, max].
+ * @param min Minimum value (inclusive)
+ * @param max Maximum value (inclusive)
+ * @return Random value in range
+ */
+uint32_t ext_random_range(uint32_t min, uint32_t max);
+
+/**
+ * Generate a random 16-bit nonce.
+ * @param nonce Buffer to store the nonce (must be at least 16 bytes)
+ * @return 0 on success, -1 on error
+ */
+int ext_random_nonce(uint8_t *nonce);
+
+/* ========== Utils ========== */
+
+/**
+ * Set a block of memory to a given value.
+ * @param dest Pointer to the memory to fill
+ * @param value Value to set (converted to unsigned char)
+ * @param n Number of bytes to fill
+ * @return Pointer to dest
+ */
+void *ext_memset(void *dest, int value, size_t n);
+
+/**
+ * Copy a block of memory.
+ * @param dest Destination buffer
+ * @param src Source buffer
+ * @param n Number of bytes to copy
+ * @return Pointer to dest
+ */
+void *ext_memcpy(void *dest, const void *src, size_t n);
+
+/**
+ * Compare two blocks of memory.
+ * @param lhs First memory block
+ * @param rhs Second memory block
+ * @param n Number of bytes to compare
+ * @return 0 if equal, negative if lhs < rhs, positive if lhs > rhs
+ */
+int ext_memcmp(const void *lhs, const void *rhs, size_t n);
+
 #ifdef __cplusplus
 }
 #endif
 
-#endif // EXT_IO_H_INCLUDED
+#endif // EXT_SUPPORT_H_INCLUDED
