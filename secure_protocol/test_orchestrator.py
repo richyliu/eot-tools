@@ -136,8 +136,7 @@ class DeviceRunner:
                         return line
         except asyncio.TimeoutError:
             raise asyncio.TimeoutError(
-                f"[{self._device_name}] Pattern '{pattern}' not found within {timeout}s. "
-                f"Recent output:\n" + "\n".join(self._output_history[-10:])
+                f"[{self._device_name}] Pattern '{pattern}' not found within {timeout}s."
             )
 
     async def assert_output(self, pattern: str, timeout: float = DEFAULT_TIMEOUT) -> str:
@@ -148,7 +147,7 @@ class DeviceRunner:
             AssertionError: If pattern not found within timeout
         """
         elapsed = time.time() - self.start_time
-        print(f"[{elapsed:.3f}s] [{self._device_name}] Waiting for pattern: {pattern}")
+        print(f"[{elapsed:.2f}s] [{self._device_name}] Waiting for pattern: {pattern}")
         try:
             return await self.wait_for_output(pattern, timeout)
         except asyncio.TimeoutError as e:
@@ -315,7 +314,7 @@ async def test_full_pairing(orchestrator: TestOrchestrator) -> None:
         await eot.send_input("\n")
         await eot.assert_output("Pairing successful")
 
-        print(f"[{orchestrator.elapsed_time():.3f}s] test_full_pairing PASSED")
+        print(f"[{orchestrator.elapsed_time():.2f}s] test_full_pairing PASSED")
 
     finally:
         await orchestrator.teardown()
@@ -365,11 +364,10 @@ async def test_basic_communication(orchestrator: TestOrchestrator) -> None:
         await eot.assert_output("Emergency brake activated")
         await hot.assert_output("received emergency brake confirmation")
 
-        print(f"[{orchestrator.elapsed_time():.3f}s] test_basic_communication PASSED")
+        print(f"[{orchestrator.elapsed_time():.2f}s] test_basic_communication PASSED")
 
     finally:
         await orchestrator.teardown()
-        orchestrator.print_header()
 
 
 async def test_wrong_pin(orchestrator: TestOrchestrator) -> None:
@@ -398,11 +396,10 @@ async def test_wrong_pin(orchestrator: TestOrchestrator) -> None:
         await hot.assert_output("Failed to enter correct PIN")
         await hot.assert_output("HOT_IDLE")
 
-        print(f"[{orchestrator.elapsed_time():.3f}s] test_wrong_pin PASSED")
+        print(f"[{orchestrator.elapsed_time():.2f}s] test_wrong_pin PASSED")
 
     finally:
         await orchestrator.teardown()
-        orchestrator.print_header()
 
 
 async def test_packet_drop(orchestrator: TestOrchestrator) -> None:
@@ -428,11 +425,10 @@ async def test_packet_drop(orchestrator: TestOrchestrator) -> None:
 
         await eot.assert_output("dropping packet 1 for testing")
 
-        print(f"[{orchestrator.elapsed_time():.3f}s] test_packet_drop PASSED (packet drop observed)")
+        print(f"[{orchestrator.elapsed_time():.2f}s] test_packet_drop PASSED (packet drop observed)")
 
     finally:
         await orchestrator.teardown()
-        orchestrator.print_header()
 
 
 async def test_timeout(orchestrator: TestOrchestrator) -> None:
@@ -455,11 +451,10 @@ async def test_timeout(orchestrator: TestOrchestrator) -> None:
         print(f"Waiting at most {timeout_sec} seconds for EOT to timeout waiting for HOT advertisement...")
         await eot.assert_output("timed out", timeout=timeout_sec)
 
-        print(f"[{orchestrator.elapsed_time():.3f}s] test_timeout PASSED")
+        print(f"[{orchestrator.elapsed_time():.2f}s] test_timeout PASSED")
 
     finally:
         await orchestrator.teardown()
-        orchestrator.print_header()
 
 
 TESTS = {
@@ -473,18 +468,19 @@ TESTS = {
 
 async def run_tests(test_names: list[str]) -> bool:
     """Run specified tests. Returns True if all pass."""
-    all_passed = True
+    tests_status = []
 
     for name in test_names:
         if name not in TESTS:
             print(f"Unknown test: {name}")
             print(f"Available tests: {', '.join(TESTS.keys())}")
-            all_passed = False
+            tests_status.append((name, "SKIPPED"))
             continue
 
         orchestrator = TestOrchestrator()
         try:
             await TESTS[name](orchestrator)
+            tests_status.append((name, "PASSED"))
         except AssertionError as e:
             print(f"FAILED: {name}")
             print(f"  Error: {e}")
@@ -496,15 +492,29 @@ async def run_tests(test_names: list[str]) -> bool:
                 print("  HOT recent output:")
                 for line in orchestrator.hot.get_recent_output(5):
                     print(f"    {line}")
-            orchestrator.print_header()
-            all_passed = False
+            tests_status.append((name, "FAILED"))
         except Exception as e:
             print(f"ERROR in {name}: {e}")
-            orchestrator.print_header()
-            all_passed = False
+            tests_status.append((name, "ERROR"))
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.2)
 
+    num_passed = sum(1 for _, status in tests_status if status == "PASSED")
+    num_failed = sum(1 for _, status in tests_status if status == "FAILED")
+    num_other = sum(1 for _, status in tests_status if status not in ("PASSED", "FAILED"))
+    num_total = len(tests_status)
+    
+    print("\n=== Test Summary ===")
+    print(f"Total: {num_total}, Passed: {num_passed}, Failed: {num_failed}, Other: {num_other}")
+
+    all_passed = num_passed == num_total
+
+    if not all_passed:
+        print("\nFailed/Errored tests:")
+        for name, status in tests_status:
+            if status != "PASSED":
+                print(f"  {name}: {status}")
+    
     return all_passed
 
 

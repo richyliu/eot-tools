@@ -150,7 +150,7 @@ int ext_io_scan_int(int *value) {
     return 0;
 }
 
-int ext_io_scan_uint(unsigned int *value) {
+int ext_io_scan_uint(uint32_t *value) {
     char buffer[32];
     if (ext_io_getline(buffer, sizeof(buffer)) < 0) {
         return -1;

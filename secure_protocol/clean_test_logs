@@ -1,0 +1,48 @@
+#!/bin/bash
+
+LOG_DIR="test_logs"
+MAX_RECENT=50
+MAX_AGE_HOURS=24
+
+if [ ! -d "$LOG_DIR" ]; then
+    echo "Log directory $LOG_DIR does not exist."
+    exit 0
+fi
+
+cd "$LOG_DIR" || exit 1
+
+all_logs=$(ls -1t)
+
+if [ -z "$all_logs" ]; then
+    echo "No test logs found."
+    exit 0
+fi
+
+total_logs=$(echo "$all_logs" | wc -l)
+echo "Found $total_logs test logs."
+
+cutoff_time=$(($(date +%s) - MAX_AGE_HOURS * 3600))
+
+for log in $all_logs; do
+    [ -d "$log" ] || continue
+
+    log_mtime=$(stat -f %m "$log" 2>/dev/null || stat -c %Y "$log" 2>/dev/null)
+
+    if [ "$log_mtime" -lt "$cutoff_time" ]; then
+        rm -rf "$log"
+        echo "Deleted (age > 24h): $log"
+    fi
+done
+
+count=0
+for log in $all_logs; do
+    [ -d "$log" ] || continue
+    count=$((count + 1))
+    if [ $count -gt $MAX_RECENT ]; then
+        rm -rf "$log"
+        echo "Deleted (not in recent $MAX_RECENT): $log"
+    fi
+done
+
+remaining=$(ls -1 | wc -l)
+echo "Cleanup complete. Remaining logs: $remaining"

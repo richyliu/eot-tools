@@ -92,7 +92,7 @@ int ext_io_scan_int(int *value) {
     return -1;
 }
 
-int ext_io_scan_uint(unsigned int *value) {
+int ext_io_scan_uint(uint32_t *value) {
     (void)value;
     return -1;
 }

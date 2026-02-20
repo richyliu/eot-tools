@@ -21,7 +21,6 @@ extern "C" {
 #define PACKET_SEND_DELAY_MS_PER_BYTE 15
 
 #define MAX_MSG_LEN 256
-#define MAX_PKT_LEN 512
 
 /**
  * Messages sent from EOT to HOT.
@@ -45,11 +44,6 @@ enum hot_msg {
     HOT_MSG_EMERGENCY,
     HOT_MSG_DISCONNECT
 };
-
-/**
- * Message type used in communication.
- */
-typedef uint8_t msg_type_t;
 
 /**
  * EOT device states.
@@ -79,11 +73,6 @@ enum hot_state {
 };
 
 /**
- * Session ID type.
- */
-typedef uint32_t session_id_t;
-
-/**
  * PIN type - 5-digit PIN.
  */
 typedef uint32_t pin_t;
@@ -92,11 +81,6 @@ typedef uint32_t pin_t;
  * Message counter for replay protection.
  */
 typedef uint32_t msg_ctr_t;
-
-/**
- * Unit ID type (5-digit EOT identifier).
- */
-typedef uint32_t unit_id_t;
 
 /**
  * EOT status data structure.
@@ -112,14 +96,6 @@ typedef struct {
     uint8_t marker_light_battery_weak;
     uint8_t marker_light_status;
 } eot_status_t;
-
-/**
- * Communicator structure containing communication handle and timeout.
- */
-typedef struct {
-    uint32_t timeout_ms;
-    comm_handle_t *comm_h;
-} communicator_t;
 
 /**
  * Connection information structure containing session keys and state.
@@ -158,40 +134,6 @@ static inline void timer_now(protocol_timer_t *t) {
 static inline int timer_diff_ms(const protocol_timer_t *end, const protocol_timer_t *start) {
     return ext_timer_diff_ms(end, start);
 }
-
-/**
- * Send a message to the peer with optional signature.
- * @param comm Communicator handle
- * @param session_id Session ID
- * @param msg_type Message type
- * @param msg Message payload
- * @param msg_len Message length
- * @param shared_secret Secret for signing (NULL for no signature)
- */
-void comm_send(communicator_t *comm, const session_id_t session_id, const msg_type_t msg_type,
-               const uint8_t *msg, const size_t msg_len, const uint8_t *shared_secret);
-
-/**
- * Send a legacy (old protocol) message.
- * @param comm Communicator handle
- * @param unit_id Unit ID
- * @param msg Message payload
- * @param msg_len Message length
- */
-void comm_send_legacy(communicator_t *comm, const unit_id_t unit_id, const uint8_t *msg, const size_t msg_len);
-
-/**
- * Receive a message from the peer with optional signature verification.
- * @param comm Communicator handle
- * @param session_id Pointer to store session ID
- * @param msg_type Pointer to store message type
- * @param msg Buffer for message payload
- * @param max_msg_len Maximum message length
- * @param shared_secret Secret for verification (NULL for no verification)
- * @return Length of received message, -1 on timeout, -2 on signature failure, negative for legacy messages
- */
-ssize_t comm_recv(communicator_t *comm, session_id_t *session_id, msg_type_t *msg_type,
-                  uint8_t *msg, const size_t max_msg_len, const uint8_t *shared_secret);
 
 /**
  * Get current EOT status data (dummy implementation).
@@ -243,14 +185,6 @@ void eot_run(communicator_t *comm, unit_id_t unit_id);
 void hot_run(communicator_t *comm);
 
 /**
- * Initialize communicator.
- * @param comm Pointer to communicator structure
- * @param device_type Device type (EOT or HOT)
- * @param timeout_ms Default timeout in milliseconds
- */
-void init_communicator(communicator_t *comm, comm_device_type_t device_type, const uint32_t timeout_ms);
-
-/**
  * EOT device main entry point.
  * @return 0 on exit
  */
@@ -261,12 +195,6 @@ int eot_main(void);
  * @return 0 on exit
  */
 int hot_main(void);
-
-/**
- * Add a packet to drop for testing purposes.
- * @param pkt_num Packet number to drop (1-indexed)
- */
-void add_drop_packet(int pkt_num);
 
 #ifdef __cplusplus
 }

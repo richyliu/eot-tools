@@ -153,7 +153,7 @@ int ext_io_scan_int(int *value);
  * @param value Pointer to store the read unsigned integer
  * @return 0 on success, -1 on error
  */
-int ext_io_scan_uint(unsigned int *value);
+int ext_io_scan_uint(uint32_t *value);
 
 /**
  * Check if input is available without blocking.
