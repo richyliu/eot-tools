@@ -1,45 +1,43 @@
-/*
- * ARM Cortex-M4 Linker Script for bare metal compilation
- * This is a minimal stub script - modify for your specific hardware.
- */
-
+/* Define memory regions */
 MEMORY
 {
-    /* Default memory regions - adjust for your target hardware */
-    FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 256K
-    RAM (rwx)   : ORIGIN = 0x20000000, LENGTH = 64K
+  FLASH (rx) : ORIGIN = 0x00000000, LENGTH = 512K
+  RAM (rwx)  : ORIGIN = 0x20000000, LENGTH = 128K
 }
 
+/* Define output sections */
 SECTIONS
 {
-    .text :
-    {
-        *(.vectors)
-        *(.text)
-        *(.text.*)
-        *(.rodata)
-        *(.rodata.*)
-        . = ALIGN(4);
-    } > FLASH
+  .text : 
+  {
+    PROVIDE(_text_start = .);
+    *(.vectors)      /* Vector table */
+    *(.text)         /* Code */
+    *(.text.*)
+    *(.rodata)       /* Read-only data */
+    PROVIDE(_text_end = .);
+  } > FLASH
 
-    .data :
-    {
-        _sdata = .;
-        *(.data)
-        *(.data.*)
-        . = ALIGN(4);
-        _edata = .;
-    } > RAM AT > FLASH
+  .data : 
+  {
+    PROVIDE(_sdata = .);    /* Start of .data in RAM (VMA) */
+    *(.data)               /* Initialized data */
+    *(.data.*)
+    PROVIDE(_edata = .);    /* End of .data in RAM */
+  } > RAM AT > FLASH
 
-    .bss :
-    {
-        _sbss = .;
-        *(.bss)
-        *(.bss.*)
-        *(COMMON)
-        . = ALIGN(4);
-        _ebss = .;
-    } > RAM
+  /* _sidata is where .data is loaded in flash (LMA) */
+  PROVIDE(_sidata = LOADADDR(.data));
 
-    _estack = ORIGIN(RAM) + LENGTH(RAM);
+  .bss : 
+  {
+    PROVIDE(_sbss = .);    /* Start of .bss */
+    *(.bss)                /* Uninitialized data */
+    *(.bss.*)
+    *(COMMON)
+    PROVIDE(_ebss = .);    /* End of .bss */
+  } > RAM
+
+  /* Stack and other sections */
+  _estack = ORIGIN(RAM) + LENGTH(RAM);
 }

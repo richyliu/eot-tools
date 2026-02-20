@@ -8,6 +8,8 @@ set -e
 # Default binary name
 BINARY_NAME="eot.elf"
 
+GDB_MODE=false
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -19,15 +21,20 @@ while [[ $# -gt 0 ]]; do
             BINARY_NAME="hot.elf"
             shift
             ;;
-        -bin|--binary)
+        -b|--binary)
             BINARY_NAME="$2"
             shift 2
+            ;;
+        -g|--gdb)
+            GDB_MODE=true
+            shift
             ;;
         -h|--help)
             echo "Usage: $0 [OPTIONS]"
             echo "  -eot, --eot     Run EOT device (default)"
             echo "  -hot, --hot     Run HOT device"
-            echo "  -bin, --binary  Specify binary file"
+            echo "  -b, --binary    Specify binary file"
+            echo "  -g, --gdb       Enable GDB debugging (port 1234)"
             echo "  -h, --help      Show this help"
             exit 0
             ;;
@@ -49,6 +56,12 @@ fi
 echo "Running QEMU Cortex-M4 with semihosting for: $BINARY_NAME"
 echo "Use Ctrl+A then X to exit QEMU"
 
+extra_args=""
+if [ "$GDB_MODE" = true ]; then
+    extra_args="-s -S"
+    echo "GDB debugging enabled. Connect to localhost:1234 with GDB."
+fi
+
 # Run QEMU with Cortex-M4 and semihosting
 # -cpu cortex-m4: Use Cortex-M4 CPU
 # -machine mps2-an386: Use MPS2 platform (compatible with Cortex-M4)
@@ -63,18 +76,5 @@ qemu-system-arm \
     -nographic \
     -monitor null \
     -semihosting \
-    -kernel "$BINARY_NAME"
-
-# Alternative machine if MPS2 doesn't work:
-# -machine lm3s6965evb (for Cortex-M3 compatibility)
-# -machine versatilepb (generic ARM platform)
-
-# For debugging with GDB:
-# qemu-system-arm \
-#     -cpu cortex-m4 \
-#     -machine mps2-an385 \
-#     -nographic \
-#     -monitor null \
-#     -semihosting \
-#     -kernel "$BINARY_NAME" \
-#     -s -S  # Wait for GDB connection on port 1234
+    -kernel "$BINARY_NAME" \
+    $extra_args

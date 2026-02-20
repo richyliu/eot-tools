@@ -16,7 +16,7 @@ ifeq ($(TARGET),arm)
     
     # ARM Cortex-M4 specific flags
     MCU_FLAGS = -mcpu=cortex-m4 -mthumb -mfloat-abi=soft
-    CFLAGS = $(MCU_FLAGS) -Os -Wall -fomit-frame-pointer -DTARGET_ARM -ffreestanding -nostdlib
+    CFLAGS = $(MCU_FLAGS) -Os -Wall -fomit-frame-pointer -DTARGET_ARM -ffreestanding -nostdlib -g
     LDFLAGS = $(MCU_FLAGS) -nostdlib -T arm_linker.ld
     
     # micro-ecc optimization for ARM/Thumb-2
@@ -30,7 +30,7 @@ ifeq ($(TARGET),arm)
 else
     # Unix target
     CC = gcc
-    CFLAGS = -flto -Os -Wall -DTARGET_UNIX
+    CFLAGS = -flto -Os -Wall -DTARGET_UNIX -g
     LDFLAGS = -flto
     UECC_FLAGS =
     EXT_SOURCES = comm_socket.c ext_support.c
@@ -53,7 +53,6 @@ $(OUTPUT_EOT): $(SOURCES) $(DEPS)
 	$(CC) $(CFLAGS) $(UECC_FLAGS) -DEOT_DEVICE -o $(OUTPUT_EOT) $(SOURCES) $(DEPS) $(LDFLAGS)
 ifeq ($(TARGET),arm)
 	$(OBJCOPY) -O binary $(OUTPUT_EOT) eot.bin
-	$(OBJCOPY) -O ihex $(OUTPUT_EOT) eot.hex
 endif
 
 # HOT build target
@@ -61,13 +60,12 @@ $(OUTPUT_HOT): $(SOURCES) $(DEPS)
 	$(CC) $(CFLAGS) $(UECC_FLAGS) -o $(OUTPUT_HOT) $(SOURCES) $(DEPS) $(LDFLAGS)
 ifeq ($(TARGET),arm)
 	$(OBJCOPY) -O binary $(OUTPUT_HOT) hot.bin
-	$(OBJCOPY) -O ihex $(OUTPUT_HOT) hot.hex
 endif
 
 # Clean target
 .PHONY: clean
 clean:
-	rm -f eot hot eot.elf hot.elf eot.bin hot.bin eot.hex hot.hex
+	rm -f eot hot eot.elf hot.elf eot.bin hot.bin
 
 # Debug build with symbols and no optimization
 .PHONY: debug
