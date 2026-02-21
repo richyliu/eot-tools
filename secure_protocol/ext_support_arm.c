@@ -1,11 +1,113 @@
 /**
- * ARM Cortex-M4 bare metal stub implementation of support abstraction layer.
- * All functions are stubs that do nothing - actual implementations
- * should be provided by the application for specific hardware.
+ * ARM Cortex-M4 bare metal implementation with QEMU semihosting for stdio.
+ * Uses ARM semihosting to interface with QEMU's host I/O.
  */
 
+#define NANOPRINTF_USE_FIELD_WIDTH_FORMAT_SPECIFIERS 1
+#define NANOPRINTF_USE_PRECISION_FORMAT_SPECIFIERS 1
+#define NANOPRINTF_USE_FLOAT_FORMAT_SPECIFIERS 0
+#define NANOPRINTF_USE_LARGE_FORMAT_SPECIFIERS 0
+#define NANOPRINTF_USE_SMALL_FORMAT_SPECIFIERS 1
+#define NANOPRINTF_USE_BINARY_FORMAT_SPECIFIERS 0
+#define NANOPRINTF_USE_WRITEBACK_FORMAT_SPECIFIERS 0
+#define NANOPRINTF_USE_ALT_FORM_FLAG 1
+
+#define NANOPRINTF_IMPLEMENTATION
+#include "nanoprintf.h"
 #include "ext_support.h"
 #include <stddef.h>
+
+/* ========== Simple string to number conversion ========== */
+
+static long __strtol(const char *nptr, char **endptr, int base) {
+    const char *s = nptr;
+    unsigned long acc;
+    int c;
+    int neg = 0;
+
+    if (base < 0 || base > 36) {
+        if (endptr) *endptr = (char *)nptr;
+        return 0;
+    }
+
+    while (1) {
+        c = *s;
+        if (c >= '0' && c <= '9' && c - '0' < base) {
+            break;
+        }
+        if (c == '-') {
+            neg = 1;
+            s++;
+            break;
+        }
+        if (c == '+') {
+            s++;
+            break;
+        }
+        if (c == '\0') {
+            if (endptr) *endptr = (char *)nptr;
+            return 0;
+        }
+        s++;
+    }
+
+    acc = 0;
+    while (1) {
+        c = *s;
+        if (c >= '0' && c <= '9' && c - '0' < base) {
+            acc = acc * (unsigned long)base + (unsigned long)(c - '0');
+        } else {
+            break;
+        }
+        s++;
+    }
+
+    if (endptr) *endptr = (char *)s;
+    return neg ? -(long)acc : (long)acc;
+}
+
+static unsigned long __strtoul(const char *nptr, char **endptr, int base) {
+    return (unsigned long)__strtol(nptr, endptr, base);
+}
+
+/* ========== ARM Semihosting ========== */
+
+__attribute__((naked)) void __semihosting_char_write0(const char *str) {
+    __asm__ volatile (
+        "mov r2, r0\n"
+        "mov r0, #4\n"
+        "mov r1, r2\n"
+        "bkpt 0xAB\n"
+        "bx lr\n"
+    );
+}
+
+__attribute__((naked)) void __semihosting_char_writec(const char *c) {
+    __asm__ volatile (
+        "mov r1, r0\n"
+        "mov r0, #3\n"
+        "bkpt 0xAB\n"
+        "bx lr\n"
+    );
+}
+
+__attribute__((naked)) int __semihosting_char_readc(void) {
+    __asm__ volatile (
+        "mov r0, #7\n"
+        "bkpt 0xAB\n"
+        "bx lr\n"
+    );
+}
+
+__attribute__((naked)) void __semihosting_exit(int status) {
+    __asm__ volatile (
+        "mov r1, r0\n"
+        "movw r0, #:lower16:0x20026\n"
+        "movt r0, #:upper16:0x20026\n"
+        "bkpt 0xAB\n"
+        "bx lr\n"
+    );
+}
 
 /* ========== Timer ========== */
 
@@ -40,61 +142,149 @@ int ext_io_init(void) {
     return 0;
 }
 
+static void stdout_putc(int c, void *ctx) {
+    (void)ctx;
+    __semihosting_char_writec((char *)&c);
+}
+
 int ext_io_printf(const char *format, ...) {
-    (void)format;
-    return 0;
+    va_list args;
+    va_start(args, format);
+    int ret = npf_vpprintf(stdout_putc, NULL, format, args);
+    va_end(args);
+    return ret;
 }
 
 int ext_io_vprintf(const char *format, va_list args) {
-    (void)format;
-    (void)args;
-    return 0;
+    return npf_vpprintf(stdout_putc, NULL, format, args);
 }
 
 int ext_io_snprintf(char *buffer, size_t bufsz, const char *format, ...) {
-    (void)format;
-    if (buffer && bufsz > 0) {
-        buffer[0] = '\0';
-    }
-    return 0;
+    va_list args;
+    va_start(args, format);
+    int ret = npf_vsnprintf(buffer, bufsz, format, args);
+    va_end(args);
+    return ret;
 }
 
 int ext_io_pprintf(ext_io_putc_fn putc, void *ctx, const char *format, ...) {
-    (void)putc;
-    (void)ctx;
-    (void)format;
-    return 0;
+    va_list args;
+    va_start(args, format);
+    int ret = npf_vpprintf(putc, ctx, format, args);
+    va_end(args);
+    return ret;
 }
 
 void ext_io_putc(char c) {
-    (void)c;
+    __semihosting_char_writec(&c);
 }
 
 void ext_io_puts(const char *str) {
-    (void)str;
+    __semihosting_char_write0(str);
 }
 
 void ext_io_flush(void) {
 }
 
 int ext_io_getc(void) {
-    return -1;
+    return __semihosting_char_readc();
 }
 
+static char input_buffer[128];
+static char writec_buf;
+static size_t input_pos = 0;
+static size_t input_len = 0;
+
 int ext_io_getline(char *buffer, size_t max_len) {
-    (void)buffer;
-    (void)max_len;
-    return -1;
+    if (max_len == 0) {
+        return -1;
+    }
+
+    size_t i = 0;
+    while (i < max_len - 1) {
+        if (input_pos >= input_len) {
+            input_len = 0;
+            input_pos = 0;
+            int c = __semihosting_char_readc();
+            if (c < 0 || c == 4) {
+                if (i == 0) {
+                    return -1;
+                }
+                break;
+            }
+            if (c == '\r' || c == '\n') {
+                writec_buf = '\r';
+                __semihosting_char_writec(&writec_buf);
+                writec_buf = '\n';
+                __semihosting_char_writec(&writec_buf);
+                break;
+            }
+            if (c >= 32 && c < 127) {
+                input_buffer[input_len++] = (char)c;
+                writec_buf = (char)c;
+                __semihosting_char_writec(&writec_buf);
+            } else if (c == 127 || c == 8) {
+                if (input_len > 0) {
+                    input_len--;
+                    writec_buf = '\b';
+                    __semihosting_char_writec(&writec_buf);
+                    writec_buf = ' ';
+                    __semihosting_char_writec(&writec_buf);
+                    writec_buf = '\b';
+                    __semihosting_char_writec(&writec_buf);
+                }
+            }
+        }
+
+        if (input_pos < input_len) {
+            char c = input_buffer[input_pos++];
+            if (c == '\r' || c == '\n') {
+                break;
+            }
+            buffer[i++] = c;
+        } else {
+            break;
+        }
+    }
+
+    buffer[i] = '\0';
+    input_pos = 0;
+    input_len = 0;
+    return (int)i;
 }
 
 int ext_io_scan_int(int *value) {
-    (void)value;
-    return -1;
+    char buffer[32];
+    if (ext_io_getline(buffer, sizeof(buffer)) < 0) {
+        return -1;
+    }
+
+    char *endptr;
+    long val = __strtol(buffer, &endptr, 10);
+
+    if (endptr == buffer || *endptr != '\0') {
+        return -1;
+    }
+
+    *value = (int)val;
+    return 0;
 }
 
 int ext_io_scan_uint(uint32_t *value) {
-    (void)value;
-    return -1;
+    char buffer[32];
+    if (ext_io_getline(buffer, sizeof(buffer)) < 0) {
+        return -1;
+    }
+
+    char *endptr;
+    unsigned long val = __strtoul(buffer, &endptr, 10);
+
+    if (endptr == buffer || *endptr != '\0') {
+        return -1;
+    }
+
+    *value = (unsigned int)val;
+    return 0;
 }
 
 int ext_io_kbhit(void) {
@@ -102,19 +292,30 @@ int ext_io_kbhit(void) {
 }
 
 void ext_io_clear_input(void) {
+    input_pos = 0;
+    input_len = 0;
 }
 
 void ext_io_set_nonblocking(int enable) {
     (void)enable;
 }
 
+static void stderr_putc(int c, void *ctx) {
+    (void)ctx;
+    char ch = (char)c;
+    __semihosting_char_writec(&ch);
+}
+
 int ext_io_eprintf(const char *format, ...) {
-    (void)format;
-    return 0;
+    va_list args;
+    va_start(args, format);
+    int ret = npf_vpprintf(stderr_putc, NULL, format, args);
+    va_end(args);
+    return ret;
 }
 
 void ext_exit(int status) {
-    (void)status;
+    __semihosting_exit(status);
     while (1) { }
 }
 

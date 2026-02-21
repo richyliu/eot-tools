@@ -6,9 +6,14 @@ This is a C project implementing a secure protocol between EOT and HOT devices f
 
 ## Build Commands
 
-### C Code
+Use `make` to build the main executable.
 
-Use `make` to build the main executable. Use `./main eot` or `./main hot` to run either the EOT or HOT.
+## Running
+
+Use `./main eot` or `./main hot` to run either the EOT or HOT on Unix.
+Use `./run_qemu.sh --eot` to run the EOT on ARM QEMU (similarly for HOT).
+
+Warning: by default, executables will continue running unless killed. Run with a sensible timeout, such as `timeout 5 ./run_qemu.sh`
 
 ## Testing
 
