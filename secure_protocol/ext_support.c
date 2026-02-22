@@ -216,7 +216,11 @@ void ext_exit(int status) {
 
 static int urandom_fd = -1;
 
-int ext_random_init(void) {
+int ext_random_init(uint32_t seed) {
+    if (seed != 0) {
+       ext_io_eprintf("Warning: Seeded randomness is not supported on Unix. Ignoring seed.\n");
+    }
+
     if (urandom_fd < 0) {
         urandom_fd = open("/dev/urandom", O_RDONLY);
         if (urandom_fd < 0) {
@@ -228,7 +232,7 @@ int ext_random_init(void) {
 
 int ext_random_bytes(uint8_t *buffer, size_t len) {
     if (urandom_fd < 0) {
-        if (ext_random_init() < 0) {
+        if (ext_random_init(0) < 0) {
             return -1;
         }
     }

@@ -1,9 +1,9 @@
 #include "devices.h"
+#include "ext_support.h"
 
 #ifdef TARGET_UNIX
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #endif
 
 #ifdef TARGET_UNIX
@@ -11,7 +11,6 @@ int main(int argc, char *argv[]) {
   if (argc > 1) {
     for (int i = 1; i < argc; i++) {
       int pkt_num = atoi(argv[i]);
-      printf("Will drop packet %d\n", pkt_num);
       add_drop_packet(pkt_num);
     }
   }
@@ -34,6 +33,26 @@ extern uint32_t _ebss;
 extern uint32_t _estack;
 
 void main_arm(void) {
+  ext_io_init();
+  ext_timer_init();
+
+  int seed;
+  ext_io_puts("Seed for RNG:\n");
+  ext_io_flush();
+  ext_io_scan_int(&seed);
+  ext_random_init(seed);
+
+  while (1) {
+    ext_io_puts("Enter packet number to drop (or -1 to stop):\n");
+    ext_io_flush();
+    int pkt_num;
+    ext_io_scan_int(&pkt_num);
+    if (pkt_num < 0) {
+      break;
+    }
+    add_drop_packet(pkt_num);
+  }
+
 #ifdef EOT_DEVICE
   eot_main();
 #else

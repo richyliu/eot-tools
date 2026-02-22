@@ -395,15 +395,16 @@ int uECC_RNG_func(uint8_t *dest, unsigned size) {
   return ext_random_bytes(dest, size) == 0;
 }
 
-int ext_random_init(void) {
+int ext_random_init(uint32_t seed) {
     uECC_set_rng(uECC_RNG_func);
     
-    prng_state = systick_get_ms() ^ 0xDEADBEEF;
-    if (prng_state == 0) {
-        prng_state = 12345;
+    if (seed != 0) {
+        prng_state = seed;
+    } else {
+        prng_state = systick_get_ms() ^ 0xDEADBEEF;
     }
 
-    ext_io_printf("[DEBUG] ext_random_init with prng_state=%08x (ms=%d)\n", prng_state, prng_state ^ 0xDEADBEEF);
+    ext_io_printf("[DEBUG] ext_random_init with prng_state=%08x\n", prng_state);
     
     return 0;
 }

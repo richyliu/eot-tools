@@ -481,10 +481,6 @@ int eot_main(void) {
     communicator_t comm;
     unit_id_t sample_unit_id = 12345;
 
-    ext_timer_init();
-    ext_io_init();
-    ext_random_init();
-
     ext_io_puts("EOT starting...\n");
     init_communicator(&comm, COMM_DEVICE_EOT, DEFAULT_TIMEOUT_MS);
     eot_run(&comm, sample_unit_id);
@@ -493,10 +489,6 @@ int eot_main(void) {
 
 int hot_main(void) {
     communicator_t comm;
-
-    ext_timer_init();
-    ext_io_init();
-    ext_random_init();
 
     ext_io_puts("HOT starting...\n");
     init_communicator(&comm, COMM_DEVICE_HOT, DEFAULT_TIMEOUT_MS);

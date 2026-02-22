@@ -151,6 +151,8 @@ void init_communicator(communicator_t *comm, comm_device_type_t device_type, con
 }
 
 void add_drop_packet(int pkt_num) {
+    ext_io_printf("[TEST] adding packet %d to drop list\n", pkt_num);
+
     for (size_t i = 0; i < sizeof(pkt_dropped) / sizeof(pkt_dropped[0]); i++) {
         if (pkt_dropped[i] == 0) {
             pkt_dropped[i] = pkt_num;

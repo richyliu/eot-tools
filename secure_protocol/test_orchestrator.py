@@ -12,6 +12,7 @@ Runs ./eot and ./hot in parallel, allowing:
 import asyncio
 import os
 import pty
+import random
 import re
 import socket
 import sys
@@ -350,6 +351,31 @@ class QemuDeviceRunner:
             if self._uart_socket_dir:
                 break
             await asyncio.sleep(0.05)
+        else:
+            raise RuntimeError(
+                f"Timeout waiting for {self.device_type} QEMU to provide UART socket info"
+            )
+
+        await self._init_process()
+
+    async def _init_process(self) -> None:
+        """Initialize the QEMU process with RNG seed and packet drop arguments."""
+        if not self.process or not self.process.stdin:
+            raise RuntimeError(f"[{self.device_type}] Process not started")
+
+        await self.wait_for_output("Seed for RNG:")
+        seed = random.randint(0, 2**31 - 1)
+        self.process.stdin.write(f"{seed}\n".encode())
+        await self.process.stdin.drain()
+
+        for pkt_num in self.packet_drops:
+            await self.wait_for_output("Enter packet number to drop")
+            self.process.stdin.write(f"{pkt_num}\n".encode())
+            await self.process.stdin.drain()
+
+        await self.wait_for_output("Enter packet number to drop")
+        self.process.stdin.write(b"-1\n")
+        await self.process.stdin.drain()
 
     async def _read_output(self) -> None:
         """Read output from QEMU process stdout."""
@@ -701,7 +727,7 @@ async def test_packet_drop(orchestrator: TestOrchestrator) -> None:
         eot = orchestrator.eot
         hot = orchestrator.hot
 
-        await eot.assert_output("Will drop packet 1")
+        await eot.assert_output("adding packet 1 to drop list")
 
         await eot.assert_output("EOT_IDLE")
         await hot.assert_output("HOT_IDLE")
@@ -778,7 +804,7 @@ async def run_tests(test_names: list[str], arm_mode: bool = False) -> bool:
             await TESTS[name](orchestrator)
             tests_status.append((name, "PASSED"))
         except AssertionError as e:
-            print(f"FAILED: {name}")
+            print(f"[{orchestrator.elapsed_time():.2f}s] {name} FAILED: {e}")
             print(f"  Error: {e}")
             if orchestrator.eot:
                 print("  EOT recent output:")
@@ -790,7 +816,7 @@ async def run_tests(test_names: list[str], arm_mode: bool = False) -> bool:
                     print(f"    {line}")
             tests_status.append((name, "FAILED"))
         except Exception as e:
-            print(f"ERROR in {name}: {e}")
+            print(f"[{orchestrator.elapsed_time():.2f}s] {name} ERROR: {e}")
             tests_status.append((name, "ERROR"))
 
         await asyncio.sleep(0.2)

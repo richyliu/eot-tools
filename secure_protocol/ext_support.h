@@ -185,9 +185,10 @@ void ext_exit(int status);
 /**
  * Initialize the randomness subsystem.
  * Should be called once before using other random functions.
+ * @param seed Optional seed value for deterministic randomness (0 for non-deterministic)
  * @return 0 on success, -1 on error
  */
-int ext_random_init(void);
+int ext_random_init(uint32_t seed);
 
 /**
  * Fill a buffer with random bytes.
