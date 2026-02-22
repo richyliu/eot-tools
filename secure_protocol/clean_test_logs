@@ -1,5 +1,7 @@
 #!/bin/bash
 
+cd "$(dirname "$0")" || exit 1
+
 LOG_DIR="test_logs"
 MAX_RECENT=50
 MAX_AGE_HOURS=24

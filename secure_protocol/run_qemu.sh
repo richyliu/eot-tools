@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Script to run QEMU Cortex-M4 system with semihosting for ARM bare metal binary
-# Supports both EOT and HOT devices with UART socket forwarding
+# Script to run QEMU Cortex-M4 system for ARM bare metal binary
+# Supports both EOT and HOT devices with:
+#   - UART0: forwarded to Unix socket for device-to-device communication
+#   - UART1: forwarded to stdio for I/O (test orchestrator interaction)
 
 set -e
 
@@ -75,33 +77,29 @@ else
     UART_SOCKET="${SOCKET_DIR}/hot_uart.sock"
 fi
 
-echo "Running QEMU Cortex-M4 with semihosting for: $BINARY_NAME"
-echo "Use Ctrl+A then X to exit QEMU"
 echo "UART_SOCKET_DIR=$SOCKET_DIR"
 
 extra_args=""
 if [ "$GDB_MODE" = true ]; then
     extra_args="-s -S"
-    echo "GDB debugging enabled. Connect to localhost:1234 with GDB."
+    echo "GDB debugging enabled. Connect to localhost:1234 with GDB." >&2
 fi
 
-# Run QEMU with Cortex-M4 and semihosting
+# Run QEMU with Cortex-M4
 # -cpu cortex-m4: Use Cortex-M4 CPU
 # -machine mps2-an386: Use MPS2 platform (compatible with Cortex-M4)
-# -nographic: Disable graphical output (use console)
 # -monitor null: Disable QEMU monitor
-# -chardev stdio,mux=on: Use stdio for semihosting I/O with multiplexing
-# -semihosting-config: Enable semihosting using the stdio chardev
-# -serial: Forward UART to Unix socket for device communication
+# -nographic: Disable graphical output, use serial for all I/O
+# -serial unix:... : UART0 -> Unix socket for device-to-device communication
+# -serial stdio: UART1 -> stdio for I/O (test orchestrator interaction)
 # -kernel: Specify the ELF binary
 qemu-system-arm \
     -machine mps2-an386 \
     -cpu cortex-m4 \
-    -nographic \
     -monitor null \
-    -chardev stdio,id=stdio_io,mux=on \
-    -semihosting-config enable=on,target=native,chardev=stdio_io \
+    -nographic \
     -serial unix:${UART_SOCKET},server,nowait \
+    -serial stdio \
     -kernel "$BINARY_NAME" \
     $extra_args </dev/stdin >/dev/stdout 2>&1 &
 

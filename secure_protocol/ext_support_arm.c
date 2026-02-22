@@ -1,6 +1,6 @@
 /**
- * ARM Cortex-M4 bare metal implementation with QEMU semihosting for stdio.
- * Uses ARM semihosting to interface with QEMU's host I/O.
+ * ARM Cortex-M4 bare metal implementation using UART for stdio.
+ * Uses UART1 for I/O (UART0 is for device communication).
  */
 
 #define NANOPRINTF_USE_FIELD_WIDTH_FORMAT_SPECIFIERS 1
@@ -15,6 +15,7 @@
 #define NANOPRINTF_IMPLEMENTATION
 #include "nanoprintf.h"
 #include "ext_support.h"
+#include "uart.h"
 #include "micro-ecc/uECC.h"
 #include <stddef.h>
 
@@ -73,35 +74,6 @@ static unsigned long __strtoul(const char *nptr, char **endptr, int base, int *e
   return (unsigned long)__strtol(nptr, endptr, base, error);
 }
 
-/* ========== ARM Semihosting ========== */
-
-__attribute__((naked)) void __semihosting_char_write0(const char *str) {
-    __asm__ volatile (
-        "mov r2, r0\n"
-        "mov r0, #4\n"
-        "mov r1, r2\n"
-        "bkpt 0xAB\n"
-        "bx lr\n"
-    );
-}
-
-__attribute__((naked)) void __semihosting_char_writec(const char *c) {
-    __asm__ volatile (
-        "mov r1, r0\n"
-        "mov r0, #3\n"
-        "bkpt 0xAB\n"
-        "bx lr\n"
-    );
-}
-
-__attribute__((naked)) int __semihosting_char_readc(void) {
-    __asm__ volatile (
-        "mov r0, #7\n"
-        "bkpt 0xAB\n"
-        "bx lr\n"
-    );
-}
-
 /* ========== ARM SysTick Timer ========== */
 
 #define SYSTICK_BASE 0xE000E010
@@ -120,10 +92,10 @@ typedef struct {
 
 #define SYSTICK_RVR_RELOAD_MASK 0x00FFFFFF
 
-static uint32_t systick_reload = 0;        /* reload value (ticks-1) */
-static uint32_t systick_tick_hz = 0;       /* ticks per second */
-static uint32_t systick_ms_accum = 0;      /* accumulated ms */
-static uint32_t systick_last_cvr = 0;      /* last sampled CVR */
+static uint32_t systick_reload = 0;
+static uint32_t systick_tick_hz = 0;
+static uint32_t systick_ms_accum = 0;
+static uint32_t systick_last_cvr = 0;
 
 static void systick_init(uint32_t cpu_hz, uint32_t tick_hz) {
     systick_tick_hz = cpu_hz;
@@ -138,16 +110,13 @@ static void systick_init(uint32_t cpu_hz, uint32_t tick_hz) {
     systick_ms_accum = 0;
 }
 
-/* Convert elapsed SysTick ticks into ms and accumulate. */
 static void systick_poll_update(void) {
     uint32_t now = SYSTICK->CVR;
     uint32_t period = systick_reload + 1;
 
-    /* elapsed ticks with wrap handling (down-counter) */
     uint32_t elapsed = (systick_last_cvr >= now) ? (systick_last_cvr - now) : (systick_last_cvr + period - now);
     systick_last_cvr = now;
 
-    /* Convert ticks -> ms, accumulate remainder to avoid drift */
     static uint32_t tick_remainder = 0;
     tick_remainder += elapsed;
 
@@ -189,15 +158,24 @@ void ext_timer_sleep_ms(uint32_t ms) {
     while ((systick_get_ms() - start) < ms) { }
 }
 
-/* ========== IO ========== */
+/* ========== UART1 for I/O ========== */
+
+static uart_handle_t *stdio_uart = NULL;
+static int io_nonblocking = 0;
 
 int ext_io_init(void) {
+    stdio_uart = uart_init(UART_1);
+    if (!stdio_uart) {
+        return -1;
+    }
     return 0;
 }
 
 static void stdout_putc(int c, void *ctx) {
     (void)ctx;
-    __semihosting_char_writec((char *)&c);
+    if (stdio_uart) {
+        uart_write_byte(stdio_uart, (uint8_t)c);
+    }
 }
 
 int ext_io_printf(const char *format, ...) {
@@ -229,27 +207,37 @@ int ext_io_pprintf(ext_io_putc_fn putc, void *ctx, const char *format, ...) {
 }
 
 void ext_io_putc(char c) {
-    __semihosting_char_writec(&c);
+    if (stdio_uart) {
+        uart_write_byte(stdio_uart, (uint8_t)c);
+    }
 }
 
 void ext_io_puts(const char *str) {
-    __semihosting_char_write0(str);
+    if (!str || !stdio_uart) return;
+    while (*str) {
+        uart_write_byte(stdio_uart, (uint8_t)*str++);
+    }
 }
 
 void ext_io_flush(void) {
 }
 
 int ext_io_getc(void) {
-    return __semihosting_char_readc();
+    if (!stdio_uart) return -1;
+    
+    uint8_t c;
+    if (uart_read_byte(stdio_uart, &c) == 0) {
+        return (int)c;
+    }
+    return -1;
 }
 
 static char input_buffer[128];
-static char writec_buf;
 static size_t input_pos = 0;
 static size_t input_len = 0;
 
 int ext_io_getline(char *buffer, size_t max_len) {
-    if (max_len == 0) {
+    if (max_len == 0 || !stdio_uart) {
         return -1;
     }
 
@@ -258,7 +246,15 @@ int ext_io_getline(char *buffer, size_t max_len) {
         if (input_pos >= input_len) {
             input_len = 0;
             input_pos = 0;
-            int c = __semihosting_char_readc();
+            
+            if (io_nonblocking && !uart_can_read(stdio_uart)) {
+                if (i == 0) {
+                    return -1;
+                }
+                break;
+            }
+            
+            int c = ext_io_getc();
             if (c < 0 || c == 4) {
                 if (i == 0) {
                     return -1;
@@ -266,25 +262,19 @@ int ext_io_getline(char *buffer, size_t max_len) {
                 break;
             }
             if (c == '\r' || c == '\n') {
-                writec_buf = '\r';
-                __semihosting_char_writec(&writec_buf);
-                writec_buf = '\n';
-                __semihosting_char_writec(&writec_buf);
+                ext_io_putc('\r');
+                ext_io_putc('\n');
                 break;
             }
             if (c >= 32 && c < 127) {
                 input_buffer[input_len++] = (char)c;
-                writec_buf = (char)c;
-                __semihosting_char_writec(&writec_buf);
+                ext_io_putc((char)c);
             } else if (c == 127 || c == 8) {
                 if (input_len > 0) {
                     input_len--;
-                    writec_buf = '\b';
-                    __semihosting_char_writec(&writec_buf);
-                    writec_buf = ' ';
-                    __semihosting_char_writec(&writec_buf);
-                    writec_buf = '\b';
-                    __semihosting_char_writec(&writec_buf);
+                    ext_io_putc('\b');
+                    ext_io_putc(' ');
+                    ext_io_putc('\b');
                 }
             }
         }
@@ -349,7 +339,8 @@ int ext_io_scan_uint(uint32_t *value) {
 }
 
 int ext_io_kbhit(void) {
-    return 0;
+    if (!stdio_uart) return 0;
+    return uart_can_read(stdio_uart);
 }
 
 void ext_io_clear_input(void) {
@@ -358,13 +349,17 @@ void ext_io_clear_input(void) {
 }
 
 void ext_io_set_nonblocking(int enable) {
-    (void)enable;
+    io_nonblocking = enable;
+    if (stdio_uart) {
+        uart_set_nonblocking(stdio_uart, enable);
+    }
 }
 
 static void stderr_putc(int c, void *ctx) {
     (void)ctx;
-    char ch = (char)c;
-    __semihosting_char_writec(&ch);
+    if (stdio_uart) {
+        uart_write_byte(stdio_uart, (uint8_t)c);
+    }
 }
 
 int ext_io_eprintf(const char *format, ...) {
@@ -378,82 +373,6 @@ int ext_io_eprintf(const char *format, ...) {
 void ext_exit(int status) {
     ext_io_printf("Exiting with status %d\n", status);
     while (1) { }
-}
-
-/* ========== ARM Semihosting File Operations ========== */
-
-#define SYS_OPEN  0x01
-#define SYS_READ  0x06
-#define SYS_CLOSE 0x02
-
-typedef struct {
-    void *handle;
-} semihosting_file_t;
-
-static int urandom_initialized = 0;
-
-__attribute__((naked)) long __semihosting_syscall(int reason, void *arg) {
-    __asm__ volatile (
-        "mov r12, r0\n"
-        "mov r0, r1\n"
-        "mov r1, r2\n"
-        "bkpt 0xAB\n"
-        "bx lr\n"
-    );
-}
-
-static long semihosting_call(int reason, void *arg) {
-    register long r0 __asm__("r0") = reason;
-    register void *r1 __asm__("r1") = arg;
-    __asm__ volatile (
-        "bkpt 0xAB"
-        : "=r"(r0)
-        : "r"(r0), "r"(r1)
-    );
-    return r0;
-}
-
-static int semihosting_open_read(const char *filename) {
-    typedef struct {
-        const char *name;
-        int len;
-        int mode;
-    } open_arg_t;
-
-    char filename_null[256];
-    int len = 0;
-    while (filename[len] && len < 255) {
-        filename_null[len] = filename[len];
-        len++;
-    }
-    filename_null[len] = '\0';
-
-    open_arg_t arg = { filename_null, len, 0 };
-    long result = semihosting_call(SYS_OPEN, &arg);
-    if (result < 0) {
-        return -1;
-    }
-    return (int)result;
-}
-
-static long semihosting_read(int fd, void *buffer, long size) {
-    typedef struct {
-        int fd;
-        void *buffer;
-        long size;
-    } read_arg_t;
-
-    read_arg_t arg = { fd, buffer, size };
-    return semihosting_call(SYS_READ, &arg);
-}
-
-static long semihosting_close(int fd) {
-    typedef struct {
-        int fd;
-    } close_arg_t;
-
-    close_arg_t arg = { fd };
-    return semihosting_call(SYS_CLOSE, &arg);
 }
 
 /* ========== xorshift32 PRNG ========== */
@@ -472,42 +391,20 @@ static uint32_t xorshift32(void) {
 
 #define NONCE_SIZE 16
 
-
-// returns 1 on success, 0 on failure
 int uECC_RNG_func(uint8_t *dest, unsigned size) {
   return ext_random_bytes(dest, size) == 0;
 }
 
 int ext_random_init(void) {
-    if (urandom_initialized) {
-        return 0;
-    }
-
     uECC_set_rng(uECC_RNG_func);
-
-    int fd = semihosting_open_read(":random");
-    if (fd < 0) {
-        ext_io_printf("failed to open :random, using fallback seed\n");
-        prng_state = 12345;
-        urandom_initialized = 1;
-        return 0;
-    }
-
-    uint32_t seed;
-    long bytes_read = semihosting_read(fd, &seed, sizeof(seed));
-    semihosting_close(fd);
-
-    if (bytes_read != sizeof(seed)) {
-        prng_state = 12345;
-    } else {
-        prng_state = seed;
-    }
-
+    
+    prng_state = systick_get_ms() ^ 0xDEADBEEF;
     if (prng_state == 0) {
         prng_state = 12345;
     }
 
-    urandom_initialized = 1;
+    ext_io_printf("[DEBUG] ext_random_init with prng_state=%08x (ms=%d)\n", prng_state, prng_state ^ 0xDEADBEEF);
+    
     return 0;
 }
 

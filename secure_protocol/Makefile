@@ -23,7 +23,7 @@ ifeq ($(TARGET),arm)
     UECC_FLAGS = -DuECC_OPTIMIZATION_LEVEL=3
     
     # Use ARM stub implementations
-    EXT_SOURCES = comm_arm.c ext_support_arm.c arm_support.c
+    EXT_SOURCES = comm_arm.c ext_support_arm.c arm_support.c uart.c
     OUTPUT_EOT = eot.elf
     OUTPUT_HOT = hot.elf
     

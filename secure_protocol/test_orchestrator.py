@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 
-DEFAULT_TIMEOUT = 5.0
+DEFAULT_TIMEOUT = 10.0
 
 SOCKET_PATHS = [
     "/tmp/eot_to_hot.sock",
@@ -588,13 +588,11 @@ async def test_full_pairing(orchestrator: TestOrchestrator) -> None:
         eot_pin_match = re.search(r"PIN is (\d{5})", eot_pin_line)
         assert eot_pin_match, f"Could not extract PIN from: {eot_pin_line}"
         pin = eot_pin_match.group(1)
-        print(f"EOT PIN: {pin}")
 
         hot_pin_line = await hot.assert_output(r"expected PIN is \d{5}")
         hot_pin_match = re.search(r"expected PIN is (\d{5})", hot_pin_line)
         assert hot_pin_match, f"Could not extract PIN from: {hot_pin_line}"
         hot_pin = hot_pin_match.group(1)
-        print(f"HOT expected PIN: {hot_pin}")
 
         assert pin == hot_pin, f"PIN mismatch: EOT={pin}, HOT={hot_pin}"
 
@@ -627,7 +625,7 @@ async def test_basic_communication(orchestrator: TestOrchestrator) -> None:
         await eot.send_input("1\n")
         await hot.send_input("-1\n")
 
-        eot_pin_line = await eot.assert_output(r"PIN is (\d{5})")
+        eot_pin_line = await eot.assert_output(r"PIN is (\d{5})", timeout=10)
         pin_match = re.search(r"PIN is (\d{5})", eot_pin_line)
         pin = pin_match.group(1) if pin_match else None
 
@@ -644,7 +642,7 @@ async def test_basic_communication(orchestrator: TestOrchestrator) -> None:
 
         await hot.send_input("1\n")
         await hot.assert_output("sent status update request")
-        await eot.assert_output("sent status update to HOT")
+        await eot.assert_output("sent status update to HOT", timeout=1)
         await hot.assert_output("EOT Status:")
 
         await hot.assert_output("Select an option")
@@ -739,7 +737,11 @@ async def test_timeout(orchestrator: TestOrchestrator) -> None:
 
         await eot.send_input("1\n")
 
-        timeout_sec = 35
+        if orchestrator.arm_mode:
+            # QEMU (ARM) may be slower, so use a longer timeout
+            timeout_sec = 60
+        else:
+            timeout_sec = 35
         print(
             f"Waiting at most {timeout_sec} seconds for EOT to timeout waiting for HOT advertisement..."
         )

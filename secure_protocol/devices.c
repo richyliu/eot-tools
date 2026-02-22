@@ -83,6 +83,7 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
         } else {
             shared_secret = NULL;
         }
+        ext_io_printf("[DEBUG] Current state: %d\n", state);
         ssize_t recv_len = comm_recv(comm, &recved_session_id, &msg_type, msg, sizeof(msg), shared_secret);
         timer_now(&now);
         if (recv_len == -1) {
@@ -125,6 +126,7 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
                 }
                 break;
             case EOT_PAIRED: {
+                ext_io_printf("[DEBUG] EOT_PAIRED, got recv_len -1\n");
                 ext_io_set_nonblocking(1);
                 char buf[16];
                 if (ext_io_getline(buf, sizeof(buf)) >= 0) {

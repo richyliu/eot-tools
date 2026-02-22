@@ -137,6 +137,7 @@ ssize_t comm_recv(communicator_t *comm, session_id_t *session_id, msg_type_t *ms
     ext_memcpy(msg_type, buffer + sizeof(session_id_t), sizeof(msg_type_t));
     ext_memcpy(msg, buffer + header_len, payload_len);
 
+    ext_io_printf("[INFO] received message: session_id=%u, msg_type=%d, recv_len=%d\n", *session_id, *msg_type, recv_len);
     return (ssize_t)payload_len;
 }
 
