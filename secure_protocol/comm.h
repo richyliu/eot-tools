@@ -18,10 +18,7 @@
 #ifdef TARGET_UNIX
 #include <sys/types.h>
 #else
-#ifndef _SSIZE_T_DEFINED
 typedef int ssize_t;
-#define _SSIZE_T_DEFINED
-#endif
 #endif
 
 #define MAX_PKT_LEN 512

@@ -52,12 +52,6 @@ int ext_timer_diff_ms(const ext_timer_t *end, const ext_timer_t *start);
  */
 void ext_timer_sleep_ms(uint32_t ms);
 
-/**
- * Sleep for a specified number of microseconds.
- * @param us Number of microseconds to sleep
- */
-void ext_timer_sleep_us(uint32_t us);
-
 /* ========== IO ========== */
 
 /**

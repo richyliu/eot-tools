@@ -5,7 +5,7 @@
 TARGET ?= unix
 
 # Source files (platform-independent)
-CORE_SOURCES = main.c devices.c crypto.c
+CORE_SOURCES = main.c devices.c crypto.c comm_common.c
 DEPS = micro-ecc/uECC.c sha256/sha256.c
 
 ifeq ($(TARGET),arm)

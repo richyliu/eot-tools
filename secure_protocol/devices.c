@@ -297,7 +297,7 @@ void hot_run(communicator_t *comm) {
                     conn.session_id = generate_session_id();
                     ext_io_printf("session id: %u\n", conn.session_id);
                     state = HOT_ADV;
-                } else if (choice >= 0 && choice <= 99999) {
+                } else if (choice >= 1 && choice <= 99999) {
                     if (recent_upgradable_legacy_unit_id == (unit_id_t)choice) {
                         ext_io_printf("Requested to pair in legacy mode with unit ID %05u, but it supports the new protocol. Please use the new protocol to pair.\n", choice);
                     } else {

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Script to run QEMU Cortex-M4 system with semihosting for ARM bare metal binary
-# Supports both EOT and HOT devices
+# Supports both EOT and HOT devices with UART socket forwarding
 
 set -e
 
@@ -53,8 +53,31 @@ if [ ! -f "$BINARY_NAME" ]; then
     exit 1
 fi
 
+# Create unique socket directory
+SOCKET_DIR=$(mktemp -d /tmp/secure_protocol_XXXXXX)
+
+qemu_pid=""
+
+cleanup() {
+    if [[ -n "$qemu_pid" ]]; then
+        kill -TERM "$qemu_pid" 2>/dev/null || true
+        wait "$qemu_pid" 2>/dev/null || true
+    fi
+    rm -rf "$SOCKET_DIR"
+}
+
+trap cleanup EXIT INT TERM HUP
+
+# Determine UART socket name based on device type
+if [[ "$BINARY_NAME" == "eot.elf" ]]; then
+    UART_SOCKET="${SOCKET_DIR}/eot_uart.sock"
+else
+    UART_SOCKET="${SOCKET_DIR}/hot_uart.sock"
+fi
+
 echo "Running QEMU Cortex-M4 with semihosting for: $BINARY_NAME"
 echo "Use Ctrl+A then X to exit QEMU"
+echo "UART_SOCKET_DIR=$SOCKET_DIR"
 
 extra_args=""
 if [ "$GDB_MODE" = true ]; then
@@ -67,14 +90,20 @@ fi
 # -machine mps2-an386: Use MPS2 platform (compatible with Cortex-M4)
 # -nographic: Disable graphical output (use console)
 # -monitor null: Disable QEMU monitor
-# -semihosting: Enable semihosting for stdio
+# -chardev stdio,mux=on: Use stdio for semihosting I/O with multiplexing
+# -semihosting-config: Enable semihosting using the stdio chardev
+# -serial: Forward UART to Unix socket for device communication
 # -kernel: Specify the ELF binary
-# -monitor telnet:127.0.0.1:1234,server,nowait: Alternative monitor access if needed
 qemu-system-arm \
     -machine mps2-an386 \
     -cpu cortex-m4 \
     -nographic \
     -monitor null \
-    -semihosting \
+    -chardev stdio,id=stdio_io,mux=on \
+    -semihosting-config enable=on,target=native,chardev=stdio_io \
+    -serial unix:${UART_SOCKET},server,nowait \
     -kernel "$BINARY_NAME" \
-    $extra_args
+    $extra_args </dev/stdin >/dev/stdout 2>&1 &
+
+qemu_pid=$!
+wait "$qemu_pid"
