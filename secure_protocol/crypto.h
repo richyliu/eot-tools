@@ -1,13 +1,14 @@
 /**
  * Cryptographic functions for EOT/HOT protocol.
- * Includes ECC key generation, shared secret computation, and HMAC-SHA256 signing.
+ * Includes ECC key generation, shared secret computation, and HMAC-SHA256
+ * signing.
  */
 
 #ifndef CRYPTO_H_INCLUDED
 #define CRYPTO_H_INCLUDED
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,22 +29,22 @@ extern "C" {
  * ECC keypair structure containing private and public keys.
  */
 typedef struct {
-    uint8_t private_key[PRIVKEY_SIZE];
-    uint8_t public_key[PUBKEY_SIZE];
+  uint8_t private_key[PRIVKEY_SIZE];
+  uint8_t public_key[PUBKEY_SIZE];
 } keypair_t;
 
 /**
  * Commitment structure for nonce commitment scheme.
  */
 typedef struct {
-    uint8_t data[COMMITMENT_SIZE];
+  uint8_t data[COMMITMENT_SIZE];
 } commitment_t;
 
 /**
  * Nonce structure for random nonces.
  */
 typedef struct {
-    uint8_t data[NONCE_SIZE];
+  uint8_t data[NONCE_SIZE];
 } nonce_t;
 
 /**
@@ -53,7 +54,7 @@ typedef uint32_t pin_t;
 
 /**
  * Compute SHA-256 hash of input data.
- * 
+ *
  * @param data Pointer to the data to hash
  * @param len Length of the data in bytes
  * @param hash_out Buffer to store the hash output (32 bytes)
@@ -62,7 +63,7 @@ void sha256_hash(const uint8_t *data, size_t len, uint8_t *hash_out);
 
 /**
  * Generate a new ECC keypair using the secp256r1 curve.
- * 
+ *
  * @param keypair Pointer to a keypair_t struct to hold the generated keys.
  * @return 1 on success, 0 on failure.
  */
@@ -70,41 +71,46 @@ int generate_keypair(keypair_t *keypair);
 
 /**
  * Compute a shared secret using ECDH.
- * 
+ *
  * @param private_key Pointer to the private key (32 bytes)
  * @param peer_public_key Pointer to the peer's public key (64 bytes)
  * @param shared_secret Buffer to store the shared secret (32 bytes)
  * @return 1 on success, 0 on failure.
  */
-int compute_shared_secret(const uint8_t *private_key, const uint8_t *peer_public_key, uint8_t *shared_secret);
+int compute_shared_secret(const uint8_t *private_key,
+                          const uint8_t *peer_public_key,
+                          uint8_t *shared_secret);
 
 /**
- * Generate HMAC-SHA256 signature for a message using the shared secret.
+ * Compute HMAC-SHA256 for a message using the shared secret.
  *
  * @param shared_secret Pointer to the shared secret (SHARED_SECRET_SIZE bytes).
- * @param message Pointer to the message to sign.
+ * @param message Pointer to the message to hash.
  * @param message_len Length of the message in bytes.
- * @param signature Pointer to a buffer to hold the signature (SIGNATURE_SIZE bytes).
+ * @param hmac_out Pointer to a buffer to hold the HMAC (SIGNATURE_SIZE bytes).
  * @return 1 on success, 0 on failure.
  */
-int sign_message(const uint8_t *shared_secret, const uint8_t *message, size_t message_len, uint8_t *signature);
+int compute_hmac(const uint8_t *shared_secret, const uint8_t *message,
+                 size_t message_len, uint8_t *hmac_out);
 
 /**
- * Verify a HMAC-SHA256 signature for a message using the shared secret.
+ * Verify a HMAC-SHA256 for a message using the shared secret.
  *
  * @param shared_secret Pointer to the shared secret (SHARED_SECRET_SIZE bytes).
- * @param message Pointer to the message whose signature is to be verified.
+ * @param message Pointer to the message whose HMAC is to be verified.
  * @param message_len Length of the message in bytes.
- * @param signature Pointer to the signature to verify (SIGNATURE_SIZE bytes).
- * @return 1 if the signature is valid, 0 otherwise.
+ * @param hmac Pointer to the HMAC to verify (SIGNATURE_SIZE bytes).
+ * @return 1 if the HMAC is valid, 0 otherwise.
  */
-int verify_signature(const uint8_t *shared_secret, const uint8_t *message, size_t message_len, const uint8_t *signature);
+int verify_hmac(const uint8_t *shared_secret, const uint8_t *message,
+                size_t message_len, const uint8_t *hmac);
 
 /**
  * Create a commitment to a given nonce using SHA-256.
- * 
+ *
  * @param nonce Pointer to the nonce_t struct containing the nonce.
- * @param commitment Pointer to the commitment_t struct to hold the resulting commitment.
+ * @param commitment Pointer to the commitment_t struct to hold the resulting
+ * commitment.
  */
 void create_commitment(const nonce_t *nonce, commitment_t *commitment);
 
@@ -112,14 +118,15 @@ void create_commitment(const nonce_t *nonce, commitment_t *commitment);
  * Verify a commitment against a given nonce.
  *
  * @param nonce Pointer to the nonce_t struct containing the nonce.
- * @param commitment Pointer to the commitment_t struct containing the commitment.
+ * @param commitment Pointer to the commitment_t struct containing the
+ * commitment.
  * @return 1 if the commitment matches the nonce, 0 otherwise.
  */
 int verify_commitment(const nonce_t *nonce, const commitment_t *commitment);
 
 /**
  * Compress an ECC public key to compressed form.
- * 
+ *
  * @param pubkey Pointer to the uncompressed public key (64 bytes)
  * @param compressed Buffer to store the compressed public key (33 bytes)
  */
@@ -127,7 +134,7 @@ void compress_pubkey(const uint8_t *pubkey, uint8_t *compressed);
 
 /**
  * Decompress a compressed ECC public key.
- * 
+ *
  * @param compressed Pointer to the compressed public key (33 bytes)
  * @param pubkey Buffer to store the uncompressed public key (64 bytes)
  * @return 1 on success, 0 if the key is invalid
@@ -136,7 +143,7 @@ int decompress_pubkey(const uint8_t *compressed, uint8_t *pubkey);
 
 /**
  * Generate a random nonce using the ext_random abstraction.
- * 
+ *
  * @param nonce Pointer to the nonce_t struct to hold the generated nonce.
  */
 void generate_nonce(nonce_t *nonce);

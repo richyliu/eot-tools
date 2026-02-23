@@ -11,6 +11,7 @@
 #include "devices.h"
 #include "comm.h"
 #include "crypto.h"
+#include "profiling.h"
 
 void get_eot_status(eot_status_t *status) {
     status->batt_cond = 2;
@@ -78,12 +79,12 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
     int choice = 0;
 
     while (1) {
+        log_stack_usage();
         if (state == EOT_PAIRED) {
             shared_secret = conn.shared_secret;
         } else {
             shared_secret = NULL;
         }
-        ext_io_printf("[DEBUG] Current state: %d\n", state);
         ssize_t recv_len = comm_recv(comm, &recved_session_id, &msg_type, msg, sizeof(msg), shared_secret);
         timer_now(&now);
         if (recv_len == -1) {
@@ -126,7 +127,6 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
                 }
                 break;
             case EOT_PAIRED: {
-                ext_io_printf("[DEBUG] EOT_PAIRED, got recv_len -1\n");
                 ext_io_set_nonblocking(1);
                 char buf[16];
                 if (ext_io_getline(buf, sizeof(buf)) >= 0) {
@@ -276,6 +276,7 @@ void hot_run(communicator_t *comm) {
     unit_id_t recent_upgradable_legacy_unit_id = 0;
 
     while (1) {
+        log_stack_usage();
         if (state == HOT_PAIRED || state == HOT_WAIT_FOR_STATUS || state == HOT_WAIT_FOR_EMERGENCY) {
             shared_secret = conn.shared_secret;
         } else {

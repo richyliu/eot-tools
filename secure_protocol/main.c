@@ -1,5 +1,6 @@
 #include "devices.h"
 #include "ext_support.h"
+#include "profiling.h"
 
 #ifdef TARGET_UNIX
 #include <stdio.h>
@@ -73,6 +74,9 @@ void Reset_Handler(void) {
   while (dst < &_ebss) {
     *dst++ = 0;
   }
+
+  /* Paint stack for profiling */
+  stack_paint();
 
   /* Call main */
   main_arm();
