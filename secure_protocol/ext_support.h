@@ -52,6 +52,17 @@ int ext_timer_diff_ms(const ext_timer_t *end, const ext_timer_t *start);
  */
 void ext_timer_sleep_ms(uint32_t ms);
 
+/**
+ * Initialize the hardware cycle counter (DWT on ARM).
+ */
+void ext_timer_init_cycles(void);
+
+/**
+ * Get the current CPU cycle count.
+ * @return 32-bit cycle count (wraps at 32 bits)
+ */
+uint32_t ext_timer_cycles(void);
+
 /* ========== IO ========== */
 
 /**

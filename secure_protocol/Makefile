@@ -89,3 +89,15 @@ arm:
 .PHONY: unix
 unix:
 	$(MAKE) TARGET=unix all
+
+ifdef EVALUATION
+CFLAGS += -DEVALUATION
+endif
+
+.PHONY: size
+size:
+	size eot hot
+
+.PHONY: arm-size
+arm-size:
+	/opt/homebrew/opt/arm-none-eabi-binutils/bin/arm-none-eabi-size eot.elf hot.elf

@@ -19,8 +19,11 @@ Warning: ARM targets on QEMU often hang on exit; use `timeout 10 ./run_qemu.sh -
 ## Testing
 
 To test the protocol flow, use `test_orchestrator.py`:
-- **Unix**: `./test_orchestrator.py all`
-- **ARM/QEMU**: `./test_orchestrator.py --arm all`
+- **Unix**: `./test_orchestrator.py brief` (runs all but timeout) or `all`
+- **ARM/QEMU**: `./test_orchestrator.py --arm brief` or `all`
+
+> [!TIP]
+> Use the `brief` mode (e.g., `./test_orchestrator.py brief`) for most development testing. It excludes the `timeout` test, which can take 30-60 seconds, significantly speeding up the test cycle.
 
 ## File Structure
 

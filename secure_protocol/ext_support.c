@@ -36,6 +36,13 @@ void ext_timer_sleep_ms(uint32_t ms) {
     usleep(ms * 1000);
 }
 
+void ext_timer_init_cycles(void) {
+}
+
+uint32_t ext_timer_cycles(void) {
+    return 0;
+}
+
 /* ========== IO ========== */
 
 static int stdin_flags = 0;

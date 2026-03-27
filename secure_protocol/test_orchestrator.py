@@ -342,7 +342,6 @@ class QemuDeviceRunner:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            start_new_session=True,
         )
 
         self._reader_task = asyncio.create_task(self._read_output())
@@ -474,10 +473,10 @@ class QemuDeviceRunner:
 
         if self.process:
             try:
-                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                self.process.terminate()
                 await asyncio.wait_for(self.process.wait(), timeout=2.0)
             except asyncio.TimeoutError:
-                os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                self.process.kill()
                 await self.process.wait()
             except ProcessLookupError:
                 print(f"[{self.device_type}] Process already terminated")
@@ -852,16 +851,19 @@ def main():
         arm_mode = True
         args.remove("--arm")
 
-    if not args:
+    if not args or args[0] == "--help" or args[0] == "-h":
         print("Usage: python test_orchestrator.py [--arm] <test_name> [test_name...]")
         print(f"Available tests: {', '.join(TESTS.keys())}")
         print("Use 'all' to run all tests")
+        print("Use 'brief' to run all tests EXCEPT timeout (faster)")
         print("Use --arm to run on QEMU/ARM instead of native")
         sys.exit(1)
 
     test_names = args
     if "all" in test_names:
         test_names = list(TESTS.keys())
+    elif "brief" in test_names:
+        test_names = [name for name in TESTS.keys() if name != "timeout"]
 
     success = asyncio.run(run_tests(test_names, arm_mode=arm_mode))
     sys.exit(0 if success else 1)

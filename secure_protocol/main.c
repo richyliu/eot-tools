@@ -33,6 +33,10 @@ extern uint32_t _sbss;
 extern uint32_t _ebss;
 extern uint32_t _estack;
 
+void SysTick_Handler(void);
+void Reset_Handler(void);
+void Default_Handler(void);
+
 void main_arm(void) {
   ext_io_init();
   ext_timer_init();
@@ -42,6 +46,20 @@ void main_arm(void) {
   ext_io_flush();
   ext_io_scan_int(&seed);
   ext_random_init(seed);
+
+  // uint32_t cycles = ext_timer_cycles();
+  // ext_timer_t t;
+  // ext_timer_now(&t);
+  // ext_io_printf("Cycles: %u\n", cycles);
+  // uint32_t foo = cycles;
+  // for (uint64_t i = 0; i < 5 * 100000000; i++) {
+  //   foo = foo * 12345 + foo + 5;
+  // }
+  // cycles = ext_timer_cycles();
+  // ext_timer_t t2;
+  // ext_timer_now(&t2);
+  // ext_io_printf("Cycles: %u, ms: %u, foo (ignore): %u\n", cycles,
+  //               ext_timer_diff_ms(&t2, &t), foo);
 
   while (1) {
     ext_io_puts("Enter packet number to drop (or -1 to stop):\n");
@@ -82,30 +100,19 @@ void Reset_Handler(void) {
   main_arm();
 
   /* Should never return, but if it does, loop forever */
-  while (1) { }
+  while (1) {
+  }
 }
 
 void Default_Handler(void) {
-  while (1) { }
+  while (1) {
+  }
 }
 
-__attribute__((section(".vectors")))
-void (*const vector_table[])(void) = {
-    (void (*)(void))&_estack,
-    Reset_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
-    Default_Handler,
+__attribute__((section(".vectors"))) void (*const vector_table[])(void) = {
+    (void (*)(void))&_estack, Reset_Handler,   Default_Handler, Default_Handler,
+    Default_Handler,          Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler,          Default_Handler, Default_Handler, Default_Handler,
+    Default_Handler,          Default_Handler, Default_Handler, SysTick_Handler,
 };
 #endif

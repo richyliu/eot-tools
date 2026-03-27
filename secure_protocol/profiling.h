@@ -37,4 +37,18 @@ static inline uint32_t stack_get_total(void) { return 0; }
 static inline void log_stack_usage(void) {}
 #endif
 
+#ifdef EVALUATION
+#include "ext_support.h"
+#define PROFILE_START(name) uint32_t _cyc_start_##name = ext_timer_cycles()
+#define PROFILE_END(name) \
+    do { \
+        uint32_t _cyc_end = ext_timer_cycles(); \
+        uint32_t _delta = _cyc_end - _cyc_start_##name; \
+        ext_io_printf("[PROFILE] %s: %u cycles\n", #name, _delta); \
+    } while (0)
+#else
+#define PROFILE_START(name)
+#define PROFILE_END(name)
+#endif
+
 #endif

@@ -5,6 +5,7 @@
  */
 
 #include "comm.h"
+#include "profiling.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -40,7 +41,10 @@ void comm_send(communicator_t *comm, const session_id_t session_id,
 
   if (shared_secret != NULL) {
     uint8_t signature[SIGNATURE_SIZE];
-    if (!compute_hmac(shared_secret, buffer, total_len, signature)) {
+    PROFILE_START(HMAC_GEN);
+    int ok = compute_hmac(shared_secret, buffer, total_len, signature);
+    PROFILE_END(HMAC_GEN);
+    if (!ok) {
       ext_io_eprintf("Failed to compute HMAC\n");
       ext_exit(1);
     }
@@ -54,8 +58,8 @@ void comm_send(communicator_t *comm, const session_id_t session_id,
   }
 
   ext_io_printf(
-      "[INFO] sending message of length %u (session_id=%u, msg_type=%d)",
-      total_len, session_id, msg_type);
+      "[INFO] sending message of length %u (payload=%zu) (session_id=%u, msg_type=%d)",
+      total_len, msg_len, session_id, msg_type);
   ext_io_flush();
   for (int i = 0; i < (int)(total_len / 5); i++) {
     ext_timer_sleep_ms(5 * 15);
@@ -132,8 +136,11 @@ ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,
     }
     uint8_t signature[SIGNATURE_SIZE];
     ext_memcpy(signature, buffer + recv_len - SIGNATURE_SIZE, SIGNATURE_SIZE);
-    if (!verify_hmac(shared_secret, buffer, recv_len - SIGNATURE_SIZE,
-                     signature)) {
+    PROFILE_START(HMAC_VERIFY);
+    int hmac_ok = verify_hmac(shared_secret, buffer, recv_len - SIGNATURE_SIZE,
+                     signature);
+    PROFILE_END(HMAC_VERIFY);
+    if (!hmac_ok) {
       ext_io_eprintf("HMAC verification failed\n");
       return -2;
     }

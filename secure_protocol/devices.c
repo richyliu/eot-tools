@@ -175,12 +175,17 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
                     ext_io_printf("EOT: establishing connection with ID %u\n", recved_session_id);
                     conn.session_id = recved_session_id;
 
-                    if (!generate_keypair(&conn.eot_keys)) {
+                    PROFILE_START(EOT_KEYGEN);
+                    int keygen_ok = generate_keypair(&conn.eot_keys);
+                    PROFILE_END(EOT_KEYGEN);
+                    if (!keygen_ok) {
                         ext_io_eprintf("Failed to generate EOT keypair\n");
                         ext_exit(1);
                     }
                     uint8_t compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
+                    PROFILE_START(EOT_COMPRESS_PUBKEY);
                     compress_pubkey(conn.eot_keys.public_key, compressed_pubkey);
+                    PROFILE_END(EOT_COMPRESS_PUBKEY);
                     comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_PUBKEY, compressed_pubkey, sizeof(compressed_pubkey), NULL);
                     ext_io_puts("EOT: sent public key to HOT, waiting for their pubkey and commitment...\n");
                     state = EOT_KEY_EX_1;
@@ -191,7 +196,10 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
                     uint8_t hot_compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
                     ext_memcpy(hot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
                     ext_memcpy(conn.hot_commitment.data, msg + COMPRESSED_PUBKEY_SIZE, COMMITMENT_SIZE);
-                    if (!decompress_pubkey(hot_compressed_pubkey, conn.hot_keys.public_key)) {
+                    PROFILE_START(EOT_DECOMPRESS_PUBKEY);
+                    int valid = decompress_pubkey(hot_compressed_pubkey, conn.hot_keys.public_key);
+                    PROFILE_END(EOT_DECOMPRESS_PUBKEY);
+                    if (!valid) {
                         ext_io_puts("EOT: Invalid HOT public key received, aborting connection.\n");
                         state = EOT_IDLE;
                         break;
@@ -206,15 +214,22 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
             case EOT_KEY_EX_2:
                 if (msg_type == HOT_MSG_NONCE && recved_session_id == conn.session_id && recv_len == (ssize_t)NONCE_SIZE) {
                     ext_memcpy(conn.hot_nonce.data, msg, NONCE_SIZE);
-                    if (!verify_commitment(&conn.hot_nonce, &conn.hot_commitment)) {
+                    PROFILE_START(EOT_VERIFY_COMMITMENT);
+                    int verified = verify_commitment(&conn.hot_nonce, &conn.hot_commitment);
+                    PROFILE_END(EOT_VERIFY_COMMITMENT);
+                    if (!verified) {
                         ext_io_eprintf("EOT: Commitment verification failed! Aborting.\n");
                         state = EOT_IDLE;
                         break;
                     }
                     timer_now(&now);
                     ext_io_printf("EOT: pairing took %d ms\n", timer_diff_ms(&now, &pairing_start));
+                    PROFILE_START(EOT_COMPUTE_PIN);
                     conn.pin = compute_pin(conn.eot_keys.public_key, conn.hot_keys.public_key, &conn.eot_nonce, &conn.hot_nonce);
+                    PROFILE_END(EOT_COMPUTE_PIN);
+                    PROFILE_START(EOT_COMPUTE_SHARED);
                     compute_shared_secret(conn.eot_keys.private_key, conn.hot_keys.public_key, conn.shared_secret);
+                    PROFILE_END(EOT_COMPUTE_SHARED);
                     ext_io_printf("EOT: received HOT nonce and verified commitment. PIN is %05u\n", conn.pin);
                     ext_io_puts("Please enter the PIN in the HOT and press the TEST button once confirmed.\n");
                     wait_for_arm_button_press();
@@ -428,16 +443,25 @@ void hot_run(communicator_t *comm) {
 
                     uint8_t eot_compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
                     ext_memcpy(eot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
+                    PROFILE_START(HOT_DECOMPRESS_PUBKEY);
                     decompress_pubkey(eot_compressed_pubkey, conn.eot_keys.public_key);
+                    PROFILE_END(HOT_DECOMPRESS_PUBKEY);
 
-                    if (!generate_keypair(&conn.hot_keys)) {
+                    PROFILE_START(HOT_KEYGEN);
+                    int keygen_ok = generate_keypair(&conn.hot_keys);
+                    PROFILE_END(HOT_KEYGEN);
+                    if (!keygen_ok) {
                         ext_io_eprintf("Failed to generate HOT keypair\n");
                         ext_exit(1);
                     }
                     generate_nonce(&conn.hot_nonce);
+                    PROFILE_START(HOT_CREATE_COMMITMENT);
                     create_commitment(&conn.hot_nonce, &conn.hot_commitment);
+                    PROFILE_END(HOT_CREATE_COMMITMENT);
                     uint8_t compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
+                    PROFILE_START(HOT_COMPRESS_PUBKEY);
                     compress_pubkey(conn.hot_keys.public_key, compressed_pubkey);
+                    PROFILE_END(HOT_COMPRESS_PUBKEY);
                     uint8_t payload[COMPRESSED_PUBKEY_SIZE + COMMITMENT_SIZE];
                     ext_memcpy(payload, compressed_pubkey, COMPRESSED_PUBKEY_SIZE);
                     ext_memcpy(payload + COMPRESSED_PUBKEY_SIZE, conn.hot_commitment.data, COMMITMENT_SIZE);
@@ -451,8 +475,12 @@ void hot_run(communicator_t *comm) {
                 if (msg_type == EOT_MSG_NONCE && recved_session_id == conn.session_id && recv_len == (ssize_t)NONCE_SIZE) {
                     ext_io_puts("HOT: received EOT nonce, sending our nonce...\n");
                     ext_memcpy(conn.eot_nonce.data, msg, NONCE_SIZE);
+                    PROFILE_START(HOT_COMPUTE_PIN);
                     conn.pin = compute_pin(conn.eot_keys.public_key, conn.hot_keys.public_key, &conn.eot_nonce, &conn.hot_nonce);
+                    PROFILE_END(HOT_COMPUTE_PIN);
+                    PROFILE_START(HOT_COMPUTE_SHARED);
                     compute_shared_secret(conn.hot_keys.private_key, conn.eot_keys.public_key, conn.shared_secret);
+                    PROFILE_END(HOT_COMPUTE_SHARED);
                     comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_NONCE, conn.hot_nonce.data, sizeof(conn.hot_nonce.data), NULL);
                     ext_io_puts("HOT: sent nonce to EOT, waiting for user to input PIN...\n");
                     state = HOT_WAIT_FOR_PIN;
@@ -462,6 +490,7 @@ void hot_run(communicator_t *comm) {
                     eot_status_t status;
                     ext_memcpy(&status, msg, sizeof(eot_status_t));
                     display_eot_status(&status);
+                    ext_io_printf("HOT: status update took %d ms\n", timer_diff_ms(&now, &last_transmit_time));
                     state = HOT_PAIRED;
                 }
                 break;
@@ -482,6 +511,7 @@ int eot_main(void) {
     communicator_t comm;
     unit_id_t sample_unit_id = 12345;
 
+    ext_timer_init_cycles();
     ext_io_puts("EOT starting...\n");
     init_communicator(&comm, COMM_DEVICE_EOT, DEFAULT_TIMEOUT_MS);
     eot_run(&comm, sample_unit_id);
@@ -491,6 +521,7 @@ int eot_main(void) {
 int hot_main(void) {
     communicator_t comm;
 
+    ext_timer_init_cycles();
     ext_io_puts("HOT starting...\n");
     init_communicator(&comm, COMM_DEVICE_HOT, DEFAULT_TIMEOUT_MS);
     hot_run(&comm);

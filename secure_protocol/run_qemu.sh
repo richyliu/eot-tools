@@ -58,17 +58,24 @@ fi
 # Create unique socket directory
 SOCKET_DIR=$(mktemp -d /tmp/secure_protocol_XXXXXX)
 
-qemu_pid=""
+# Capture the script PID (which QEMU will inherit via exec)
+SCRIPT_PID=$$
+(
+    # Wait for the transition: Either this process dies OR it gets reparented to 1
+    while [ "$(ps -o ppid= -p $SCRIPT_PID | tr -d ' ')" -ne 1 ] && \
+          kill -0 "$SCRIPT_PID" 2>/dev/null; do
+        sleep 1
+    done
 
-cleanup() {
-    if [[ -n "$qemu_pid" ]]; then
-        kill -TERM "$qemu_pid" 2>/dev/null || true
-        wait "$qemu_pid" 2>/dev/null || true
+    # If the parent died (PPID=1), kill QEMU
+    if [ "$(ps -o ppid= -p $SCRIPT_PID | tr -d ' ')" -eq 1 ]; then
+        kill -TERM "$SCRIPT_PID" 2>/dev/null || kill -9 "$SCRIPT_PID" 2>/dev/null
     fi
-    rm -rf "$SOCKET_DIR"
-}
 
-trap cleanup EXIT INT TERM HUP
+    # Final cleanup of the socket directory
+    rm -rf "$SOCKET_DIR"
+) &
+disown
 
 # Determine UART socket name based on device type
 if [[ "$BINARY_NAME" == "eot.elf" ]]; then
@@ -93,7 +100,7 @@ fi
 # -serial unix:... : UART0 -> Unix socket for device-to-device communication
 # -serial stdio: UART1 -> stdio for I/O (test orchestrator interaction)
 # -kernel: Specify the ELF binary
-qemu-system-arm \
+exec qemu-system-arm \
     -machine mps2-an386 \
     -cpu cortex-m4 \
     -monitor null \
@@ -101,7 +108,4 @@ qemu-system-arm \
     -serial unix:${UART_SOCKET},server,nowait \
     -serial stdio \
     -kernel "$BINARY_NAME" \
-    $extra_args </dev/stdin >/dev/stdout 2>&1 &
-
-qemu_pid=$!
-wait "$qemu_pid"
+    $extra_args 2>&1
