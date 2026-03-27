@@ -104,7 +104,7 @@ static volatile uint32_t systick_ms_accum = 0;
 void SysTick_Handler(void) { systick_ms_accum++; }
 
 static void systick_init(uint32_t cpu_hz, uint32_t tick_hz) {
-  systick_tick_hz = cpu_hz;
+  systick_tick_hz = cpu_hz / tick_hz;
   systick_reload = (cpu_hz / tick_hz) - 1;
 
   SYSTICK->CSR = 0;
@@ -145,21 +145,9 @@ void ext_timer_sleep_ms(uint32_t ms) {
   }
 }
 
-void ext_timer_init_cycles(void) {
-  // Cycle counter not implemented in QEMU
-}
+void ext_timer_init_cycles(void) {}
 
-uint32_t ext_timer_cycles(void) {
-  // fall back to SysTick elapsed cycles as an alternative cycle counter.
-  uint32_t ms1, ms2, cvr;
-  do {
-    ms1 = systick_ms_accum;
-    cvr = SYSTICK->CVR;
-    ms2 = systick_ms_accum;
-  } while (ms1 != ms2);
-
-  return ms1 * (systick_reload + 1) + (systick_reload - cvr);
-}
+uint32_t ext_timer_cycles(void) { return systick_ms_accum * systick_tick_hz; }
 
 /* ========== UART1 for I/O ========== */
 

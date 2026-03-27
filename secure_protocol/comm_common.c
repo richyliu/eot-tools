@@ -57,9 +57,9 @@ void comm_send(communicator_t *comm, const session_id_t session_id,
     total_len += SIGNATURE_SIZE;
   }
 
-  ext_io_printf(
-      "[INFO] sending message of length %u (payload=%zu) (session_id=%u, msg_type=%d)",
-      total_len, msg_len, session_id, msg_type);
+  ext_io_printf("[INFO] sending message of length %u (payload=%u) "
+                "(session_id=%u, msg_type=%d)",
+                total_len, msg_len, session_id, msg_type);
   ext_io_flush();
   for (int i = 0; i < (int)(total_len / 5); i++) {
     ext_timer_sleep_ms(5 * 15);
@@ -138,7 +138,7 @@ ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,
     ext_memcpy(signature, buffer + recv_len - SIGNATURE_SIZE, SIGNATURE_SIZE);
     PROFILE_START(HMAC_VERIFY);
     int hmac_ok = verify_hmac(shared_secret, buffer, recv_len - SIGNATURE_SIZE,
-                     signature);
+                              signature);
     PROFILE_END(HMAC_VERIFY);
     if (!hmac_ok) {
       ext_io_eprintf("HMAC verification failed\n");
