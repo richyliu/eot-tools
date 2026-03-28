@@ -38,11 +38,12 @@ class BaseDeviceRunner:
                 return line
 
         try:
-            async with asyncio.timeout(timeout):
+            async def _reader():
                 while True:
                     line = await self._output_queue.get()
                     if regex.search(line):
                         return line
+            return await asyncio.wait_for(_reader(), timeout=timeout)
         except asyncio.TimeoutError:
             raise asyncio.TimeoutError(
                 f"[{self._device_name}] Pattern '{pattern}' not found within {timeout}s."
@@ -51,11 +52,9 @@ class BaseDeviceRunner:
     async def assert_output(self, pattern: str, timeout: float = DEFAULT_TIMEOUT) -> str:
         """Assert that a line matching the pattern appears within timeout."""
         elapsed = time.time() - self.start_time
-        print(f"[{elapsed:.2f}s] [{self._device_name}] Waiting for pattern: {pattern}")
+        print(f"[{elapsed:5.2f}s] [{self._device_name}] Waiting for pattern: {pattern}")
         try:
             return await self.wait_for_output(pattern, timeout)
-        except asyncio.timeout:
-            raise AssertionError(f"[{self._device_name}] Pattern '{pattern}' not found within {timeout}s.")
         except asyncio.TimeoutError:
             raise AssertionError(f"[{self._device_name}] Pattern '{pattern}' not found within {timeout}s.")
 
@@ -290,17 +289,18 @@ class QemuDeviceRunner(BaseDeviceRunner):
 
 class UartBridge:
     """Bridges UART sockets between EOT and HOT QEMU instances."""
-    def __init__(self):
+    def __init__(self, baud_rate: Optional[int] = None):
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._eot_writer: Optional[asyncio.StreamWriter] = None
         self._hot_writer: Optional[asyncio.StreamWriter] = None
+        self.baud_rate = baud_rate
 
     async def _bridge_loop(self, eot_reader: asyncio.StreamReader, hot_reader: asyncio.StreamReader) -> None:
         """Bidirectional forwarding between sockets."""
         await asyncio.gather(
-            self._forward(eot_reader, self._hot_writer),
-            self._forward(hot_reader, self._eot_writer),
+            self._forward(eot_reader, self._hot_writer, "EOT->HOT"),
+            self._forward(hot_reader, self._eot_writer, "HOT->EOT"),
         )
 
     async def start(self, eot_socket_path: str, hot_socket_path: str) -> None:
@@ -320,14 +320,25 @@ class UartBridge:
                 await asyncio.sleep(0.1)
         raise RuntimeError(f"Could not connect to socket: {path}")
 
-    async def _forward(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _forward(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, name: str) -> None:
         try:
             while self._running:
                 data = await reader.read(4096)
                 if not data: break
+
+                
+                if self.baud_rate:
+                    wire_bits = len(data) * 8
+                    delay = wire_bits / self.baud_rate
+                    await asyncio.sleep(delay)
+                    print(f"         [{name}] {wire_bits} bits ({delay:.3f}s)")
+
                 writer.write(data)
                 await writer.drain()
-        except (asyncio.CancelledError, Exception): pass
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"[{name}] Bridge error: {e}")
 
     async def stop(self) -> None:
         self._running = False
@@ -352,12 +363,14 @@ class TestOrchestrator:
         arm_mode: bool = False,
         seed: Optional[int] = None,
         mode: str = "default",
+        baud_rate: Optional[int] = None,
     ):
         self.eot_bin = eot_bin
         self.hot_bin = hot_bin
         self.arm_mode = arm_mode
         self.seed = seed
         self.mode = mode
+        self.baud_rate = baud_rate
         self.eot: Union[UnixDeviceRunner, QemuDeviceRunner, None] = None
         self.hot: Union[UnixDeviceRunner, QemuDeviceRunner, None] = None
         self.log_dir: Optional[Path] = None
@@ -411,9 +424,12 @@ class TestOrchestrator:
             eot_socket = getattr(self.eot, "uart_socket_path", None)
             hot_socket = getattr(self.hot, "uart_socket_path", None)
             if eot_socket and hot_socket:
-                self._uart_bridge = UartBridge()
+                self._uart_bridge = UartBridge(baud_rate=self.baud_rate)
                 await self._uart_bridge.start(eot_socket, hot_socket)
-                print(f"UART bridge started: {eot_socket} <-> {hot_socket}")
+                msg = f"UART bridge started: {eot_socket} <-> {hot_socket}"
+                if self.baud_rate:
+                    msg += f" (baud rate: {self.baud_rate})"
+                print(msg)
 
     async def teardown(self) -> None:
         """Stop devices and cleanup."""

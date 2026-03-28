@@ -284,7 +284,10 @@ TESTS = {
 
 
 async def run_tests(
-    test_names: list[str], arm_mode: bool = False, seed: Optional[int] = None
+    test_names: list[str],
+    arm_mode: bool = False,
+    seed: Optional[int] = None,
+    baud: Optional[int] = None,
 ) -> bool:
     """Run specified tests. Returns True if all pass."""
     tests_status = []
@@ -296,7 +299,7 @@ async def run_tests(
             tests_status.append((name, "SKIPPED"))
             continue
 
-        orchestrator = TestOrchestrator(arm_mode=arm_mode, seed=seed)
+        orchestrator = TestOrchestrator(arm_mode=arm_mode, seed=seed, baud_rate=baud)
         try:
             await TESTS[name](orchestrator)
             tests_status.append((name, "PASSED"))
@@ -364,15 +367,31 @@ def main():
             print("Error: --seed requires an integer value")
             sys.exit(1)
 
+    baud = None
+    if "--baud" in args:
+        idx = args.index("--baud")
+        if idx + 1 < len(args):
+            try:
+                baud = int(args[idx + 1])
+                args.pop(idx + 1)
+                args.pop(idx)
+            except ValueError:
+                print(f"Error: Invalid baud value '{args[idx+1]}'")
+                sys.exit(1)
+        else:
+            print("Error: --baud requires an integer value")
+            sys.exit(1)
+
     if not args or args[0] == "--help" or args[0] == "-h":
         print(
-            "Usage: python test_orchestrator.py [--arm] [--seed SEED] <test_name> [test_name...]"
+            "Usage: python test_orchestrator.py [--arm] [--seed SEED] [--baud BAUD] <test_name> [test_name...]"
         )
         print(f"Available tests: {', '.join(TESTS.keys())}")
         print("Use 'all' to run all tests")
         print("Use 'brief' to run all tests EXCEPT timeout (faster)")
         print("Use --arm to run on QEMU/ARM instead of native")
         print("Use --seed to specify a base RNG seed (ARM only)")
+        print("Use --baud to specify a baud rate for the UART bridge (ARM only)")
         sys.exit(1)
 
     test_names = args
@@ -390,7 +409,7 @@ def main():
             raise FileNotFoundError("Binaries not found. Please build the project first.")
 
 
-    success = asyncio.run(run_tests(test_names, arm_mode=arm_mode, seed=seed))
+    success = asyncio.run(run_tests(test_names, arm_mode=arm_mode, seed=seed, baud=baud))
     sys.exit(0 if success else 1)
 
 
