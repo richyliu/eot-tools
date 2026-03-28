@@ -3,10 +3,12 @@
  *
  * QEMU TCG plugin: instruction counter + magic-address section profiler.
  *
- * Guest writes a char* to PROFILE_MAGIC_ADDR to start a named section;
- * writes NULL to end it.  The plugin reads the pointed-to string from
- * guest memory and reports instruction counts on exit.
+ * Guest writes a string to PROFILE_MAGIC_NAME (four 4-byte words to store the
+ * name) and then a 1 to PROFILE_MAGIC_CONTROL to begin profiling. Once the
+ * guest is done, it writes 2 to PROFILE_MAGIC_CONTROL. The plugin will output
+ * the number of instructions executed between the two writes.
  */
+#include "inscount.h"
 #include <glib.h>
 #include <inttypes.h>
 #include <stdio.h>
@@ -17,13 +19,10 @@
 
 QEMU_PLUGIN_EXPORT int qemu_plugin_version = QEMU_PLUGIN_VERSION;
 
-/* Must match the macro in the guest source */
-#define PROFILE_MAGIC_ADDR UINT64_C(0x2001F000)
-
 static qemu_plugin_u64 insn_count;
 
 typedef struct {
-  char *name;
+  char name[PROFILE_MAGIC_NAME_SIZE];
   uint64_t start_count;
 } SectionState;
 
@@ -43,18 +42,29 @@ static void vcpu_insn_exec_before(unsigned int cpu_index, void *udata) {
 
 static void vcpu_mem_cb(unsigned int cpu_index, qemu_plugin_meminfo_t info,
                         uint64_t vaddr, void *udata) {
-  if (vaddr != PROFILE_MAGIC_ADDR) {
+  if (vaddr < PROFILE_MAGIC_BASE || vaddr >= PROFILE_MAGIC_END) {
     return;
   }
 
   qemu_plugin_mem_value val = qemu_plugin_mem_get_value(info);
-  uint64_t guest_ptr = 0;
+  uint64_t guest_val = 0;
+  int guest_val_size = 4;
   switch (val.type) {
+  case QEMU_PLUGIN_MEM_VALUE_U8:
+    guest_val = val.data.u8;
+    guest_val_size = 1;
+    break;
+  case QEMU_PLUGIN_MEM_VALUE_U16:
+    guest_val = val.data.u16;
+    guest_val_size = 2;
+    break;
   case QEMU_PLUGIN_MEM_VALUE_U32:
-    guest_ptr = val.data.u32;
+    guest_val = val.data.u32;
+    guest_val_size = 4;
     break;
   case QEMU_PLUGIN_MEM_VALUE_U64:
-    guest_ptr = val.data.u64;
+    guest_val = val.data.u64;
+    guest_val_size = 8;
     break;
   default:
     return;
@@ -62,29 +72,30 @@ static void vcpu_mem_cb(unsigned int cpu_index, qemu_plugin_meminfo_t info,
 
   SectionState *state = qemu_plugin_scoreboard_find(section_states, cpu_index);
 
-  if (guest_ptr != 0) {
-    /* PROFILE_START: read the name string from guest memory */
-    g_autoptr(GByteArray) data = g_byte_array_new();
-    if (qemu_plugin_read_memory_vaddr(guest_ptr, data, 128)) {
-      g_byte_array_append(data, (const guint8 *)"\0", 1); /* null-terminate */
-      if (state->name) {
-        g_free(state->name);
-      }
-      state->name = g_strdup((const char *)data->data);
+  if (vaddr == PROFILE_MAGIC_CONTROL) {
+    if (guest_val == 1) {
       state->start_count = qemu_plugin_u64_get(insn_count, cpu_index);
-    }
-  } else {
-    /* PROFILE_END: report and reset */
-    if (state->name) {
+    } else if (guest_val == 2) {
       uint64_t end_count = qemu_plugin_u64_get(insn_count, cpu_index);
       uint64_t delta = end_count - state->start_count;
       g_autoptr(GString) out = g_string_new(NULL);
       g_string_append_printf(out, "[PROFILE] %s: %" PRIu64 " instructions\n",
                              state->name, delta);
       qemu_plugin_outs(out->str);
-      g_free(state->name);
-      state->name = NULL;
     }
+  } else if (vaddr >= PROFILE_MAGIC_NAME_START &&
+             vaddr < PROFILE_MAGIC_NAME_END) {
+    size_t offset = vaddr - PROFILE_MAGIC_NAME_START;
+    for (int i = 0; i < guest_val_size; i++) {
+      state->name[offset + i] = (guest_val >> (i * 8)) & 0xFF;
+    }
+    // make sure name is always null terminated
+    state->name[PROFILE_MAGIC_NAME_SIZE - 1] = '\0';
+  } else {
+    g_autoptr(GString) out = g_string_new(NULL);
+    g_string_append_printf(out, "[inscount] unknown magic address: %llx\n",
+                           vaddr);
+    qemu_plugin_outs(out->str);
   }
 }
 

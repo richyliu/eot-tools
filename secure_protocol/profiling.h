@@ -2,6 +2,7 @@
 #define PROFILING_H
 
 #include <stdint.h>
+#include <string.h>
 
 #define STACK_SENTINEL 0xDEADBEEF
 
@@ -39,19 +40,18 @@ static inline void log_stack_usage(void) {}
 
 #ifdef EVALUATION
 #include "ext_support.h"
-
-// Magic address for QEMU inscount plugin to intercept
-#define PROFILE_MAGIC_ADDR 0x2001F000
+#include "qemu_tcg_plugins/inscount.h"
 
 #define PROFILE_START(name)                                                    \
   do {                                                                         \
     ext_io_printf("PROFILE_START: %s\n", #name);                               \
-    *(volatile const char **)PROFILE_MAGIC_ADDR = #name;                       \
+    strlcpy((char *)PROFILE_MAGIC_NAME_START, #name, PROFILE_MAGIC_NAME_SIZE); \
+    *(volatile int *)(PROFILE_MAGIC_CONTROL) = 1;                              \
   } while (0)
 
 #define PROFILE_END(name)                                                      \
   do {                                                                         \
-    *(volatile const char **)PROFILE_MAGIC_ADDR = (const char *)0;             \
+    *(volatile int *)(PROFILE_MAGIC_CONTROL) = 2;                              \
     ext_io_printf("PROFILE_END: %s\n", #name);                                 \
   } while (0)
 #else

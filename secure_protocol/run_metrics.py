@@ -27,7 +27,7 @@ def main():
     print(f"Building ARM binaries with EVALUATION=1 for mode: {args.mode}...")
     run_cmd("make clean && make arm EVALUATION=1")
     print("Building QEMU inscount plugin...")
-    run_cmd("make -C qemu_tcg_plugins")
+    run_cmd("make -C qemu_tcg_plugins clean && make -C qemu_tcg_plugins")
     collect_size()
     
     print(f"\n--- Running Orchestrator Tests (ARM/QEMU) [{args.mode}] ---")

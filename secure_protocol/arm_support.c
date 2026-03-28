@@ -23,3 +23,15 @@ void *memcpy(void *dest, const void *src, size_t n) {
   }
   return dest;
 }
+
+size_t strlcpy(char *dst, const char *src, size_t size) {
+  size_t len = 0;
+  while (len < size - 1 && src[len] != '\0') {
+    dst[len] = src[len];
+    len++;
+  }
+  if (size > 0) {
+    dst[len] = '\0';
+  }
+  return len;
+}

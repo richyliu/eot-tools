@@ -58,26 +58,13 @@ fi
 # Create unique socket directory in the workspace
 SOCKET_DIR=$(mktemp -d ./tmp_sockets/secure_protocol_sockets_XXXXXX)
 
-# Capture the script PID (which QEMU will inherit via exec)
-SCRIPT_PID=$$
-(
-    # Wait for the transition: Either this process dies OR it gets reparented to 1
-    while [ "${SCRIPT_PID:-0}" -gt 0 ] && \
-        CURRENT_PPID=$(ps -o ppid= -p "$SCRIPT_PID" 2>/dev/null | tr -d ' ' || echo 0) && \
-        [ "${CURRENT_PPID:-0}" -ne 1 ] && \
-        kill -0 "$SCRIPT_PID" 2>/dev/null; do
-        sleep 1
-    done
-
-    # If the parent died (PPID=1), kill QEMU
-    FINAL_PPID=$(ps -o ppid= -p "$SCRIPT_PID" 2>/dev/null | tr -d ' ' || echo 0)
-    if [ "${FINAL_PPID:-0}" -eq 1 ]; then
-        kill -TERM "$SCRIPT_PID" 2>/dev/null || kill -9 "$SCRIPT_PID" 2>/dev/null
-    fi
-
-    # Final cleanup of the socket directory
-    rm -rf "$SOCKET_DIR"
-) &
+# need setsid to run this in its own process group (and outlive the script and qemu)
+perl -MPOSIX=setsid -e '
+    setsid();
+    my ($pid, $dir) = @ARGV;
+    while (kill(0, $pid)) { sleep 1 }
+    system("rm", "-rf", $dir);
+' -- "$$" "$SOCKET_DIR" &
 disown
 
 # Determine UART socket name based on device type
