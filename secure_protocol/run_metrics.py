@@ -22,6 +22,7 @@ def collect_size():
 def main():
     parser = argparse.ArgumentParser(description="Collect benchmarking metrics.")
     parser.add_argument("--mode", choices=["all", "brief"], default="all", help="Test mode (default: all)")
+    parser.add_argument("--baud", type=int, default=1200, help="Baud rate for UART simulation (default: 1200, matching hardware)")
     args = parser.parse_args()
 
     print(f"Building ARM binaries with EVALUATION=1 for mode: {args.mode}...")
@@ -31,11 +32,18 @@ def main():
     collect_size()
     
     print(f"\n--- Running Orchestrator Tests (ARM/QEMU) [{args.mode}] ---")
-    print("This may take 30-60 seconds...")
-    run_cmd(f"./test_orchestrator.py --arm {args.mode}")
+    print(f"Simulating real-time latency with baud rate: {args.baud}")
+    print("This may take 30-90 seconds...")
+    
+    cmd = f"./test_orchestrator.py --arm {args.mode} --baud {args.baud}"
+    run_cmd(cmd)
 
-    # Find the newest log directory
-    log_dirs = glob.glob("test_logs/test_full_pairing_*")
+    # Find the newest log directory that contains basic communication (has pairing, status, and EB)
+    log_dirs = glob.glob("test_logs/test_basic_communication_*")
+    if not log_dirs:
+        # Fallback to pairing if basic_communication wasn't run
+        log_dirs = glob.glob("test_logs/test_full_pairing_*")
+        
     if not log_dirs:
         print("No test logs found.")
         return
@@ -68,7 +76,10 @@ def main():
                     metrics["latency"]["pairing"] = int(m.group(1))
                 m = re.search(r"status update took (\d+) ms", line)
                 if m:
-                    metrics["latency"]["status"] = int(m.group(1))
+                    metrics["latency"]["status_request"] = int(m.group(1))
+                m = re.search(r"received emergency brake confirmation from EOT\. (\d+) ms elapsed", line)
+                if m:
+                    metrics["latency"]["emergency_brake"] = int(m.group(1))
                 
                 # 4. Bandwidth
                 m = re.search(r"sending message of length (\d+) \(payload=(\d+)\)", line)
@@ -83,7 +94,8 @@ def main():
 
     print("\n--- 2. End-to-End Latency ---")
     for k, v in metrics["latency"].items():
-        print(f"  {k.capitalize()}: {v} ms")
+        name = k.replace("_", " ").capitalize()
+        print(f"  {name}: {v} ms")
 
     print("\n--- 3. Peak Memory Usage (Stack High-Water) ---")
     if metrics["stack"]:
@@ -110,3 +122,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
