@@ -70,6 +70,7 @@ enum hot_state {
   HOT_WAIT_FOR_EMERGENCY,
   HOT_LEGACY,
   HOT_LEGACY_ARMED,
+  HOT_WAIT_FOR_LEGACY_EB_ACK,
 };
 
 /**
