@@ -26,6 +26,8 @@ def main():
 
     print(f"Building ARM binaries with EVALUATION=1 for mode: {args.mode}...")
     run_cmd("make clean && make arm EVALUATION=1")
+    print("Building QEMU inscount plugin...")
+    run_cmd("make -C qemu_tcg_plugins")
     collect_size()
     
     print(f"\n--- Running Orchestrator Tests (ARM/QEMU) [{args.mode}] ---")
@@ -50,10 +52,10 @@ def main():
         if not os.path.exists(log_file): continue
         with open(log_file, "r") as f:
             for line in f:
-                # 1. Cycle profiling
-                m = re.search(r"\[PROFILE\] ([\w_]+): (\d+) cycles", line)
+                # 1. Cycle/Instruction profiling
+                m = re.search(r"\[PROFILE\] ([\w_]+): (\d+) (cycles|instructions)", line)
                 if m:
-                    metrics["cycles"][m.group(1)] = int(m.group(2))
+                    metrics["cycles"][m.group(1)] = (int(m.group(2)), m.group(3))
                 
                 # 2. Stack High-Water Mark profiling
                 m = re.search(r"Stack: (\d+)/(\d+) bytes", line)
@@ -74,9 +76,10 @@ def main():
                     metrics["bandwidth"]["total"] += int(m.group(1))
                     metrics["bandwidth"]["payload"] += int(m.group(2))
 
-    print("--- 1. Computational Cost (Cycle Counts) ---")
+    print("--- 1. Computational Cost (Cycles/Instructions) ---")
     for k, v in metrics["cycles"].items():
-        print(f"  {k}: {v} cycles")
+        val, unit = v
+        print(f"  {k}: {val} {unit}")
 
     print("\n--- 2. End-to-End Latency ---")
     for k, v in metrics["latency"].items():

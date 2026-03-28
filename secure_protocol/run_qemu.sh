@@ -55,8 +55,8 @@ if [ ! -f "$BINARY_NAME" ]; then
     exit 1
 fi
 
-# Create unique socket directory
-SOCKET_DIR=$(mktemp -d /tmp/secure_protocol_XXXXXX)
+# Create unique socket directory in the workspace
+SOCKET_DIR=$(mktemp -d ./tmp_sockets/secure_protocol_sockets_XXXXXX)
 
 # Capture the script PID (which QEMU will inherit via exec)
 SCRIPT_PID=$$
@@ -115,7 +115,7 @@ exec qemu-system-arm \
     -serial stdio \
     -kernel "$BINARY_NAME" \
     -icount shift=0,align=off,sleep=on \
-    -plugin ./qemu/contrib/plugins/libhotblocks.dylib \
+    -plugin ./qemu_tcg_plugins/libinscount.dylib \
     -d plugin \
     $extra_args 2>&1
 

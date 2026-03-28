@@ -27,17 +27,18 @@ from typing import Optional, Union
 DEFAULT_TIMEOUT = 10.0
 
 SOCKET_PATHS = [
-    "/tmp/eot_to_hot.sock",
-    "/tmp/hot_to_eot.sock",
+    "./tmp_sockets/eot_to_hot.sock",
+    "./tmp_sockets/hot_to_eot.sock",
 ]
 
 
 class DeviceRunner:
     """Manages a single device subprocess (eot or hot)."""
 
-    def __init__(self, executable: str, packet_drops: Optional[list[int]] = None):
+    def __init__(self, executable: str, packet_drops: Optional[list[int]] = None, mode: str = "default"):
         self.executable = executable
         self.packet_drops = packet_drops or []
+        self.mode = mode
         self.process: Optional[asyncio.subprocess.Process] = None
         self._output_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: Optional[asyncio.Task] = None
@@ -50,7 +51,9 @@ class DeviceRunner:
         self._device_name: str = Path(executable).stem
 
     def _build_args(self) -> list[str]:
-        return [str(p) for p in self.packet_drops]
+        args = [self.mode]
+        args.extend([str(p) for p in self.packet_drops])
+        return args
 
     async def start(self, log_dir: Path) -> None:
         """Start the device subprocess with PTY for proper buffering."""
@@ -319,9 +322,17 @@ class UartBridge:
 class QemuDeviceRunner:
     """Manages a QEMU subprocess with UART communication."""
 
-    def __init__(self, device_type: str, packet_drops: Optional[list[int]] = None):
+    def __init__(
+        self,
+        device_type: str,
+        packet_drops: Optional[list[int]] = None,
+        seed: Optional[int] = None,
+        mode: str = "default",
+    ):
         self.device_type = device_type
         self.packet_drops = packet_drops or []
+        self.seed = seed
+        self.mode = mode
         self.process: Optional[asyncio.subprocess.Process] = None
         self._output_queue: asyncio.Queue = asyncio.Queue()
         self._reader_task: Optional[asyncio.Task] = None
@@ -362,8 +373,17 @@ class QemuDeviceRunner:
         if not self.process or not self.process.stdin:
             raise RuntimeError(f"[{self.device_type}] Process not started")
 
+        await self.wait_for_output("Select protocol mode")
+        mode_val = {"default": "0", "test_profile": "1", "test_timing": "2"}.get(self.mode, "0")
+        self.process.stdin.write(f"{mode_val}\n".encode())
+        await self.process.stdin.drain()
+
+        if self.mode != "default":
+            # Profile and timing modes don't ask for seed or packet drops
+            return
+
         await self.wait_for_output("Seed for RNG:")
-        seed = random.randint(0, 2**31 - 1)
+        seed = self.seed if self.seed is not None else random.randint(0, 2**31 - 1)
         self.process.stdin.write(f"{seed}\n".encode())
         await self.process.stdin.drain()
 
@@ -491,11 +511,18 @@ class TestOrchestrator:
     """Manages both EOT and HOT devices for testing."""
 
     def __init__(
-        self, eot_bin: str = "./eot", hot_bin: str = "./hot", arm_mode: bool = False
+        self,
+        eot_bin: str = "./eot",
+        hot_bin: str = "./hot",
+        arm_mode: bool = False,
+        seed: Optional[int] = None,
+        mode: str = "default",
     ):
         self.eot_bin = eot_bin
         self.hot_bin = hot_bin
         self.arm_mode = arm_mode
+        self.seed = seed
+        self.mode = mode
         self.eot: Union[DeviceRunner, QemuDeviceRunner, None] = None
         self.hot: Union[DeviceRunner, QemuDeviceRunner, None] = None
         self.log_dir: Optional[Path] = None
@@ -527,11 +554,14 @@ class TestOrchestrator:
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         if self.arm_mode:
-            self.eot = QemuDeviceRunner("eot", eot_drops)
-            self.hot = QemuDeviceRunner("hot", hot_drops)
+            # If a base seed is provided, give EOT and HOT different but deterministic seeds
+            eot_seed = self.seed if self.seed is None else self.seed
+            hot_seed = self.seed if self.seed is None else self.seed + 1
+            self.eot = QemuDeviceRunner("eot", eot_drops, seed=eot_seed, mode=self.mode)
+            self.hot = QemuDeviceRunner("hot", hot_drops, seed=hot_seed, mode=self.mode)
         else:
-            self.eot = DeviceRunner(self.eot_bin, eot_drops)
-            self.hot = DeviceRunner(self.hot_bin, hot_drops)
+            self.eot = DeviceRunner(self.eot_bin, eot_drops, mode=self.mode)
+            self.hot = DeviceRunner(self.hot_bin, hot_drops, mode=self.mode)
 
         await asyncio.gather(
             self.eot.start(self.log_dir),
@@ -788,7 +818,9 @@ TESTS = {
 }
 
 
-async def run_tests(test_names: list[str], arm_mode: bool = False) -> bool:
+async def run_tests(
+    test_names: list[str], arm_mode: bool = False, seed: Optional[int] = None
+) -> bool:
     """Run specified tests. Returns True if all pass."""
     tests_status = []
 
@@ -799,7 +831,7 @@ async def run_tests(test_names: list[str], arm_mode: bool = False) -> bool:
             tests_status.append((name, "SKIPPED"))
             continue
 
-        orchestrator = TestOrchestrator(arm_mode=arm_mode)
+        orchestrator = TestOrchestrator(arm_mode=arm_mode, seed=seed)
         try:
             await TESTS[name](orchestrator)
             tests_status.append((name, "PASSED"))
@@ -852,12 +884,30 @@ def main():
         arm_mode = True
         args.remove("--arm")
 
+    seed = None
+    if "--seed" in args:
+        idx = args.index("--seed")
+        if idx + 1 < len(args):
+            try:
+                seed = int(args[idx + 1])
+                args.pop(idx + 1)
+                args.pop(idx)
+            except ValueError:
+                print(f"Error: Invalid seed value '{args[idx+1]}'")
+                sys.exit(1)
+        else:
+            print("Error: --seed requires an integer value")
+            sys.exit(1)
+
     if not args or args[0] == "--help" or args[0] == "-h":
-        print("Usage: python test_orchestrator.py [--arm] <test_name> [test_name...]")
+        print(
+            "Usage: python test_orchestrator.py [--arm] [--seed SEED] <test_name> [test_name...]"
+        )
         print(f"Available tests: {', '.join(TESTS.keys())}")
         print("Use 'all' to run all tests")
         print("Use 'brief' to run all tests EXCEPT timeout (faster)")
         print("Use --arm to run on QEMU/ARM instead of native")
+        print("Use --seed to specify a base RNG seed (ARM only)")
         sys.exit(1)
 
     test_names = args
@@ -875,7 +925,7 @@ def main():
             raise FileNotFoundError("Binaries not found. Please build the project first.")
 
 
-    success = asyncio.run(run_tests(test_names, arm_mode=arm_mode))
+    success = asyncio.run(run_tests(test_names, arm_mode=arm_mode, seed=seed))
     sys.exit(0 if success else 1)
 
 

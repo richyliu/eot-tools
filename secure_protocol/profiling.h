@@ -39,12 +39,20 @@ static inline void log_stack_usage(void) {}
 
 #ifdef EVALUATION
 #include "ext_support.h"
-#define PROFILE_START(name) uint32_t _cyc_start_##name = ext_timer_cycles()
+
+// Magic address for QEMU inscount plugin to intercept
+#define PROFILE_MAGIC_ADDR 0x2001F000
+
+#define PROFILE_START(name)                                                    \
+  do {                                                                         \
+    ext_io_printf("PROFILE_START: %s\n", #name);                               \
+    *(volatile const char **)PROFILE_MAGIC_ADDR = #name;                       \
+  } while (0)
+
 #define PROFILE_END(name)                                                      \
   do {                                                                         \
-    uint32_t _cyc_end = ext_timer_cycles();                                    \
-    uint32_t _delta = _cyc_end - _cyc_start_##name;                            \
-    ext_io_printf("[PROFILE] %s: %u cycles\n", #name, _delta);                 \
+    *(volatile const char **)PROFILE_MAGIC_ADDR = (const char *)0;             \
+    ext_io_printf("PROFILE_END: %s\n", #name);                                 \
   } while (0)
 #else
 #define PROFILE_START(name)

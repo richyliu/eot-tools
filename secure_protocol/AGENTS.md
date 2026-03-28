@@ -24,6 +24,8 @@ To test the protocol flow, use `test_orchestrator.py`:
 
 > [!TIP]
 > Use the `brief` mode (e.g., `./test_orchestrator.py brief`) for most development testing. It excludes the `timeout` test, which can take 30-60 seconds, significantly speeding up the test cycle.
+> 
+> Use the `--seed <int>` flag with `--arm` to provide a reproducible RNG seed for both guest devices (EOT and HOT). For example: `./test_orchestrator.py --arm --seed 42 all`.
 
 ## File Structure
 
