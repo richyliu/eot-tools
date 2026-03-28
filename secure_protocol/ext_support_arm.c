@@ -142,6 +142,7 @@ int ext_timer_diff_ms(const ext_timer_t *end, const ext_timer_t *start) {
 void ext_timer_sleep_ms(uint32_t ms) {
   uint32_t start = systick_get_ms();
   while ((systick_get_ms() - start) < ms) {
+    asm volatile("wfi");
   }
 }
 

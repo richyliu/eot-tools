@@ -62,13 +62,16 @@ SOCKET_DIR=$(mktemp -d /tmp/secure_protocol_XXXXXX)
 SCRIPT_PID=$$
 (
     # Wait for the transition: Either this process dies OR it gets reparented to 1
-    while [ "$(ps -o ppid= -p $SCRIPT_PID | tr -d ' ')" -ne 1 ] && \
-          kill -0 "$SCRIPT_PID" 2>/dev/null; do
+    while [ "${SCRIPT_PID:-0}" -gt 0 ] && \
+        CURRENT_PPID=$(ps -o ppid= -p "$SCRIPT_PID" 2>/dev/null | tr -d ' ' || echo 0) && \
+        [ "${CURRENT_PPID:-0}" -ne 1 ] && \
+        kill -0 "$SCRIPT_PID" 2>/dev/null; do
         sleep 1
     done
 
     # If the parent died (PPID=1), kill QEMU
-    if [ "$(ps -o ppid= -p $SCRIPT_PID | tr -d ' ')" -eq 1 ]; then
+    FINAL_PPID=$(ps -o ppid= -p "$SCRIPT_PID" 2>/dev/null | tr -d ' ' || echo 0)
+    if [ "${FINAL_PPID:-0}" -eq 1 ]; then
         kill -TERM "$SCRIPT_PID" 2>/dev/null || kill -9 "$SCRIPT_PID" 2>/dev/null
     fi
 
@@ -108,4 +111,11 @@ exec qemu-system-arm \
     -serial unix:${UART_SOCKET},server,nowait \
     -serial stdio \
     -kernel "$BINARY_NAME" \
+    -icount shift=0,align=off,sleep=off \
+    -plugin ./qemu/contrib/plugins/libhotblocks.dylib \
+    -d plugin \
     $extra_args 2>&1
+
+    # -plugin ./qemu/contrib/plugins/libexeclog.dylib \
+    # -plugin ./qemu/contrib/plugins/libhotblocks.dylib \
+    # -plugin ./qemu/tests/tcg/plugins/libinsn.dylib \

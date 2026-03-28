@@ -464,13 +464,7 @@ class QemuDeviceRunner:
 
     async def stop(self) -> None:
         """Terminate the QEMU subprocess."""
-        if self._reader_task:
-            self._reader_task.cancel()
-            try:
-                await self._reader_task
-            except asyncio.CancelledError:
-                pass
-
+        # politely terminate the QEMU process first, to collect any data at shutdown
         if self.process:
             try:
                 self.process.terminate()
@@ -480,6 +474,13 @@ class QemuDeviceRunner:
                 await self.process.wait()
             except ProcessLookupError:
                 print(f"[{self.device_type}] Process already terminated")
+
+        if self._reader_task:
+            self._reader_task.cancel()
+            try:
+                await self._reader_task
+            except asyncio.CancelledError:
+                pass
 
     def get_recent_output(self, n: int = 20) -> list[str]:
         """Get the last n lines of output."""
@@ -763,8 +764,8 @@ async def test_timeout(orchestrator: TestOrchestrator) -> None:
         await eot.send_input("1\n")
 
         if orchestrator.arm_mode:
-            # QEMU (ARM) may be slower, so use a longer timeout
-            timeout_sec = 60
+            # QEMU (ARM) is faster since it doesn't use real time clock
+            timeout_sec = 10
         else:
             timeout_sec = 35
         print(
@@ -864,6 +865,15 @@ def main():
         test_names = list(TESTS.keys())
     elif "brief" in test_names:
         test_names = [name for name in TESTS.keys() if name != "timeout"]
+
+    # check that binaries have been built
+    if not arm_mode:
+        if not os.path.exists("./eot") or not os.path.exists("./hot"):
+            raise FileNotFoundError("Binaries not found. Please build the project first.")
+    else:
+        if not os.path.exists("./eot.elf") or not os.path.exists("./hot.elf"):
+            raise FileNotFoundError("Binaries not found. Please build the project first.")
+
 
     success = asyncio.run(run_tests(test_names, arm_mode=arm_mode))
     sys.exit(0 if success else 1)
