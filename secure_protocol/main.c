@@ -46,6 +46,8 @@ void test_timing(void) {
 #ifdef TARGET_UNIX
 int main(int argc, char *argv[]) {
   protocol_mode_t mode = MODE_DEFAULT;
+  const char *socket1 = NULL;
+  const char *socket2 = NULL;
   int arg_start = 1;
 
   if (argc > 1) {
@@ -62,6 +64,18 @@ int main(int argc, char *argv[]) {
   }
 
   if (mode == MODE_DEFAULT) {
+    if (argc < arg_start + 2) {
+      fprintf(stderr,
+              "Usage: %s [mode] <socket1> <socket2> [packet_drops...]\n",
+              argv[0]);
+      return 1;
+    }
+    socket1 = argv[arg_start];
+    socket2 = argv[arg_start + 1];
+    arg_start += 2;
+    printf("[DEBUG] Using socket1: %s\n", socket1);
+    printf("[DEBUG] Using socket2: %s\n", socket2);
+
     for (int i = arg_start; i < argc; i++) {
       int pkt_num = atoi(argv[i]);
       add_drop_packet(pkt_num);
@@ -77,9 +91,9 @@ int main(int argc, char *argv[]) {
   }
 
 #ifdef EOT_DEVICE
-  return eot_main();
+  return eot_main(socket1, socket2);
 #else
-  return hot_main();
+  return hot_main(socket1, socket2);
 #endif
 }
 #endif
@@ -133,9 +147,9 @@ void main_arm(void) {
     }
 
 #ifdef EOT_DEVICE
-    eot_main();
+    eot_main(NULL, NULL);
 #else
-    hot_main();
+    hot_main(NULL, NULL);
 #endif
   } else if (mode == MODE_TEST_PROFILE) {
     test_profile();

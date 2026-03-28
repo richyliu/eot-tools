@@ -15,9 +15,6 @@
 
 #include "comm.h"
 
-#define EOT_TO_HOT_SOCKET_PATH "./tmp_sockets/eot_to_hot.sock"
-#define HOT_TO_EOT_SOCKET_PATH "./tmp_sockets/hot_to_eot.sock"
-
 // Maximum packet length
 #define MAX_PKT_LEN 512
 
@@ -28,7 +25,8 @@ struct comm_handle {
   uint32_t timeout_ms;
 };
 
-comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms) {
+comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms,
+                        const char *socket_path1, const char *socket_path2) {
   comm_handle_t *handle = malloc(sizeof(comm_handle_t));
   if (!handle) {
     return NULL;
@@ -39,11 +37,11 @@ comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms) {
   const char *send_path;
   const char *recv_path;
   if (device_type == COMM_DEVICE_EOT) {
-    send_path = EOT_TO_HOT_SOCKET_PATH;
-    recv_path = HOT_TO_EOT_SOCKET_PATH;
+    send_path = socket_path1;
+    recv_path = socket_path2;
   } else {
-    send_path = HOT_TO_EOT_SOCKET_PATH;
-    recv_path = EOT_TO_HOT_SOCKET_PATH;
+    send_path = socket_path2;
+    recv_path = socket_path1;
   }
 
   // Create send socket
@@ -74,7 +72,9 @@ comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms) {
   strncpy(recv_addr.sun_path, recv_path, sizeof(recv_addr.sun_path) - 1);
 
   // Remove existing socket file
-  unlink(recv_path);
+  if (unlink(recv_path) < 0 && errno != ENOENT) {
+    perror("unlink");
+  }
 
   // Bind receive socket
   if (bind(handle->recv_fd, (struct sockaddr *)&recv_addr, sizeof(recv_addr)) <

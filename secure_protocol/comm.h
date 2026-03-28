@@ -50,7 +50,8 @@ typedef struct comm_handle comm_handle_t;
  * @param timeout_ms Receive timeout in milliseconds
  * @return Handle to communication connection, or NULL on failure
  */
-comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms);
+comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms,
+                        const char *socket_path1, const char *socket_path2);
 
 /**
  * Send data over communication
@@ -134,7 +135,8 @@ ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,
  * @param timeout_ms Default timeout in milliseconds
  */
 void init_communicator(communicator_t *comm, comm_device_type_t device_type,
-                       const uint32_t timeout_ms);
+                       const uint32_t timeout_ms, const char *socket_path1,
+                       const char *socket_path2);
 
 /**
  * Add a packet to drop for testing purposes.

@@ -12,7 +12,10 @@ struct comm_handle {
 
 static struct comm_handle static_handle;
 
-comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms) {
+comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms,
+                        const char *socket_path1, const char *socket_path2) {
+  (void)socket_path1;
+  (void)socket_path2;
   uart_handle_t *uart = uart_init(UART_0);
   if (!uart) {
     return NULL;

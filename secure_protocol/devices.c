@@ -599,23 +599,25 @@ void hot_run(communicator_t *comm) {
   }
 }
 
-int eot_main(void) {
+int eot_main(const char *socket_path1, const char *socket_path2) {
   communicator_t comm;
   unit_id_t sample_unit_id = 12345;
 
   ext_timer_init_cycles();
   ext_io_puts("EOT starting...\n");
-  init_communicator(&comm, COMM_DEVICE_EOT, DEFAULT_TIMEOUT_MS);
+  init_communicator(&comm, COMM_DEVICE_EOT, DEFAULT_TIMEOUT_MS, socket_path1,
+                    socket_path2);
   eot_run(&comm, sample_unit_id);
   return 0;
 }
 
-int hot_main(void) {
+int hot_main(const char *socket_path1, const char *socket_path2) {
   communicator_t comm;
 
   ext_timer_init_cycles();
   ext_io_puts("HOT starting...\n");
-  init_communicator(&comm, COMM_DEVICE_HOT, DEFAULT_TIMEOUT_MS);
+  init_communicator(&comm, COMM_DEVICE_HOT, DEFAULT_TIMEOUT_MS, socket_path1,
+                    socket_path2);
   hot_run(&comm);
   return 0;
 }

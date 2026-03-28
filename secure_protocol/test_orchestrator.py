@@ -35,8 +35,9 @@ SOCKET_PATHS = [
 class DeviceRunner:
     """Manages a single device subprocess (eot or hot)."""
 
-    def __init__(self, executable: str, packet_drops: Optional[list[int]] = None, mode: str = "default"):
+    def __init__(self, executable: str, socket_paths: list[str], packet_drops: Optional[list[int]] = None, mode: str = "default"):
         self.executable = executable
+        self.socket_paths = socket_paths
         self.packet_drops = packet_drops or []
         self.mode = mode
         self.process: Optional[asyncio.subprocess.Process] = None
@@ -52,6 +53,7 @@ class DeviceRunner:
 
     def _build_args(self) -> list[str]:
         args = [self.mode]
+        args.extend(self.socket_paths)
         args.extend([str(p) for p in self.packet_drops])
         return args
 
@@ -532,8 +534,11 @@ class TestOrchestrator:
     def _clean_sockets(self) -> None:
         """Remove existing socket files."""
         for path in SOCKET_PATHS:
+            p = Path(path)
+            if not p.parent.exists():
+                p.parent.mkdir(parents=True, exist_ok=True)
             try:
-                os.unlink(path)
+                p.unlink()
             except FileNotFoundError:
                 pass
 
@@ -560,8 +565,8 @@ class TestOrchestrator:
             self.eot = QemuDeviceRunner("eot", eot_drops, seed=eot_seed, mode=self.mode)
             self.hot = QemuDeviceRunner("hot", hot_drops, seed=hot_seed, mode=self.mode)
         else:
-            self.eot = DeviceRunner(self.eot_bin, eot_drops, mode=self.mode)
-            self.hot = DeviceRunner(self.hot_bin, hot_drops, mode=self.mode)
+            self.eot = DeviceRunner(self.eot_bin, SOCKET_PATHS, eot_drops, mode=self.mode)
+            self.hot = DeviceRunner(self.hot_bin, SOCKET_PATHS, hot_drops, mode=self.mode)
 
         await asyncio.gather(
             self.eot.start(self.log_dir),

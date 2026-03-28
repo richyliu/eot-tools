@@ -187,13 +187,13 @@ void hot_run(communicator_t *comm);
  * EOT device main entry point.
  * @return 0 on exit
  */
-int eot_main(void);
+int eot_main(const char *socket_path1, const char *socket_path2);
 
 /**
  * HOT device main entry point.
  * @return 0 on exit
  */
-int hot_main(void);
+int hot_main(const char *socket_path1, const char *socket_path2);
 
 #ifdef __cplusplus
 }

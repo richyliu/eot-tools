@@ -165,9 +165,10 @@ ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,
 }
 
 void init_communicator(communicator_t *comm, comm_device_type_t device_type,
-                       const uint32_t timeout_ms) {
+                       const uint32_t timeout_ms, const char *socket_path1,
+                       const char *socket_path2) {
   comm->timeout_ms = timeout_ms;
-  comm->comm_h = comm_init(device_type, timeout_ms);
+  comm->comm_h = comm_init(device_type, timeout_ms, socket_path1, socket_path2);
   if (!comm->comm_h) {
     ext_io_eprintf("Failed to initialize communication\n");
     ext_exit(1);
