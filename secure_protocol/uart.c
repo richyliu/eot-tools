@@ -1,4 +1,5 @@
 #include "uart.h"
+#include "ext_support.h"
 #include <stddef.h>
 
 #define UART_BASE_ADDR(id) (0x40004000 + ((id) * 0x1000))
@@ -79,6 +80,7 @@ int uart_read_byte(uart_handle_t *handle, uint8_t *byte) {
       return -1;
     }
     while (!(regs->STATE & UART_STATE_RXFULL)) {
+      ext_timer_sleep_ms(1);
     }
   }
 
