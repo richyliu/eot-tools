@@ -103,6 +103,9 @@ fi
 # -serial unix:... : UART0 -> Unix socket for device-to-device communication
 # -serial stdio: UART1 -> stdio for I/O (test orchestrator interaction)
 # -kernel: Specify the ELF binary
+# -icount ...: Sync systick with host, allow WFI to sleep
+# -plugin: TCG plugin shared lib
+# -d plugin: enable the plugin
 exec qemu-system-arm \
     -machine mps2-an386 \
     -cpu cortex-m4 \
@@ -111,7 +114,7 @@ exec qemu-system-arm \
     -serial unix:${UART_SOCKET},server,nowait \
     -serial stdio \
     -kernel "$BINARY_NAME" \
-    -icount shift=0,align=off,sleep=off \
+    -icount shift=0,align=off,sleep=on \
     -plugin ./qemu/contrib/plugins/libhotblocks.dylib \
     -d plugin \
     $extra_args 2>&1

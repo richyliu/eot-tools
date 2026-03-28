@@ -764,8 +764,8 @@ async def test_timeout(orchestrator: TestOrchestrator) -> None:
         await eot.send_input("1\n")
 
         if orchestrator.arm_mode:
-            # QEMU (ARM) is faster since it doesn't use real time clock
-            timeout_sec = 10
+            # QEMU (ARM) is slower due to emulation overhead
+            timeout_sec = 40
         else:
             timeout_sec = 35
         print(
