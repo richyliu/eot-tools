@@ -1,12 +1,12 @@
 #ifndef DEVICES_H_INCLUDED
 #define DEVICES_H_INCLUDED
 
-#include "ext_support.h"
 #include "comm.h"
 #include "crypto.h"
+#include "ext_support.h"
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,50 +26,50 @@ extern "C" {
  * Messages sent from EOT to HOT.
  */
 enum eot_msg {
-    EOT_MSG_PUBKEY = 0,
-    EOT_MSG_NONCE,
-    EOT_MSG_STATUS,
-    EOT_MSG_EMERGENCY,
-    EOT_MSG_UPGRADE,
+  EOT_MSG_PUBKEY = 0,
+  EOT_MSG_NONCE,
+  EOT_MSG_STATUS,
+  EOT_MSG_EMERGENCY,
+  EOT_MSG_UPGRADE,
 };
 
 /**
  * Messages sent from HOT to EOT.
  */
 enum hot_msg {
-    HOT_MSG_ADV = 0,
-    HOT_MSG_PUBKEY_AND_COMMIT,
-    HOT_MSG_NONCE,
-    HOT_MSG_STATUS,
-    HOT_MSG_EMERGENCY,
-    HOT_MSG_DISCONNECT
+  HOT_MSG_ADV = 0,
+  HOT_MSG_PUBKEY_AND_COMMIT,
+  HOT_MSG_NONCE,
+  HOT_MSG_STATUS,
+  HOT_MSG_EMERGENCY,
+  HOT_MSG_DISCONNECT
 };
 
 /**
  * EOT device states.
  */
 enum eot_state {
-    EOT_IDLE = 0,
-    EOT_WAIT_ADV,
-    EOT_KEY_EX_1,
-    EOT_KEY_EX_2,
-    EOT_PAIRED,
-    EOT_LEGACY,
+  EOT_IDLE = 0,
+  EOT_WAIT_ADV,
+  EOT_KEY_EX_1,
+  EOT_KEY_EX_2,
+  EOT_PAIRED,
+  EOT_LEGACY,
 };
 
 /**
  * HOT device states.
  */
 enum hot_state {
-    HOT_IDLE = 0,
-    HOT_ADV,
-    HOT_KEY_EX_1,
-    HOT_WAIT_FOR_PIN,
-    HOT_PAIRED,
-    HOT_WAIT_FOR_STATUS,
-    HOT_WAIT_FOR_EMERGENCY,
-    HOT_LEGACY,
-    HOT_LEGACY_ARMED,
+  HOT_IDLE = 0,
+  HOT_ADV,
+  HOT_KEY_EX_1,
+  HOT_WAIT_FOR_PIN,
+  HOT_PAIRED,
+  HOT_WAIT_FOR_STATUS,
+  HOT_WAIT_FOR_EMERGENCY,
+  HOT_LEGACY,
+  HOT_LEGACY_ARMED,
 };
 
 /**
@@ -86,30 +86,30 @@ typedef uint32_t msg_ctr_t;
  * EOT status data structure.
  */
 typedef struct {
-    uint8_t batt_cond;
-    uint16_t pressure;
-    uint16_t batt_charge_used;
-    uint8_t valve_circuit_operational;
-    uint8_t confirmation_indicator;
-    uint8_t turbine_status;
-    uint8_t motion_detection;
-    uint8_t marker_light_battery_weak;
-    uint8_t marker_light_status;
+  uint8_t batt_cond;
+  uint16_t pressure;
+  uint16_t batt_charge_used;
+  uint8_t valve_circuit_operational;
+  uint8_t confirmation_indicator;
+  uint8_t turbine_status;
+  uint8_t motion_detection;
+  uint8_t marker_light_battery_weak;
+  uint8_t marker_light_status;
 } eot_status_t;
 
 /**
  * Connection information structure containing session keys and state.
  */
 typedef struct {
-    session_id_t session_id;
-    keypair_t eot_keys;
-    keypair_t hot_keys;
-    uint8_t shared_secret[SHARED_SECRET_SIZE];
-    commitment_t hot_commitment;
-    nonce_t eot_nonce;
-    nonce_t hot_nonce;
-    pin_t pin;
-    msg_ctr_t ctr;
+  session_id_t session_id;
+  keypair_t eot_keys;
+  keypair_t hot_keys;
+  uint8_t shared_secret[SHARED_SECRET_SIZE];
+  commitment_t hot_commitment;
+  nonce_t eot_nonce;
+  nonce_t hot_nonce;
+  pin_t pin;
+  msg_ctr_t ctr;
 } conn_info_t;
 
 /**
@@ -121,9 +121,7 @@ typedef ext_timer_t protocol_timer_t;
  * Get current time for protocol timing.
  * @param t Pointer to timer struct to fill with current time
  */
-static inline void timer_now(protocol_timer_t *t) {
-    ext_timer_now(t);
-}
+static inline void timer_now(protocol_timer_t *t) { ext_timer_now(t); }
 
 /**
  * Calculate time difference in milliseconds.
@@ -131,8 +129,9 @@ static inline void timer_now(protocol_timer_t *t) {
  * @param start The earlier time
  * @return Difference in milliseconds
  */
-static inline int timer_diff_ms(const protocol_timer_t *end, const protocol_timer_t *start) {
-    return ext_timer_diff_ms(end, start);
+static inline int timer_diff_ms(const protocol_timer_t *end,
+                                const protocol_timer_t *start) {
+  return ext_timer_diff_ms(end, start);
 }
 
 /**

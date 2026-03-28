@@ -7,9 +7,9 @@
 #ifndef EXT_SUPPORT_H_INCLUDED
 #define EXT_SUPPORT_H_INCLUDED
 
-#include <stdint.h>
-#include <stddef.h>
 #include <stdarg.h>
+#include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -22,7 +22,7 @@ extern "C" {
  * The actual implementation is defined in the .c file.
  */
 typedef struct ext_timer_s {
-    uint64_t timestamp_ms;
+  uint64_t timestamp_ms;
 } ext_timer_t;
 
 /**
@@ -141,7 +141,8 @@ int ext_io_getc(void);
  * Read a line from input up to max_len-1 characters.
  * The newline character is consumed but not stored.
  * @param buffer Buffer to store the line
- * @param max_len Maximum number of characters to read (including null terminator)
+ * @param max_len Maximum number of characters to read (including null
+ * terminator)
  * @return Number of characters read, or -1 on error
  */
 int ext_io_getline(char *buffer, size_t max_len);
@@ -196,7 +197,8 @@ void ext_exit(int status);
 /**
  * Initialize the randomness subsystem.
  * Should be called once before using other random functions.
- * @param seed Optional seed value for deterministic randomness (0 for non-deterministic)
+ * @param seed Optional seed value for deterministic randomness (0 for
+ * non-deterministic)
  * @return 0 on success, -1 on error
  */
 int ext_random_init(uint32_t seed);

@@ -1,20 +1,20 @@
 #ifndef UART_H
 #define UART_H
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct uart_handle uart_handle_t;
 
 typedef enum {
-    UART_0 = 0,
-    UART_1 = 1,
-    UART_2 = 2,
-    UART_3 = 3,
-    UART_4 = 4,
+  UART_0 = 0,
+  UART_1 = 1,
+  UART_2 = 2,
+  UART_3 = 3,
+  UART_4 = 4,
 } uart_id_t;
 
-uart_handle_t* uart_init(uart_id_t uart_id);
+uart_handle_t *uart_init(uart_id_t uart_id);
 void uart_deinit(uart_handle_t *handle);
 
 int uart_write_byte(uart_handle_t *handle, uint8_t byte);
