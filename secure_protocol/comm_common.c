@@ -91,7 +91,8 @@ void comm_send_legacy(communicator_t *comm, const unit_id_t unit_id,
     ext_io_eprintf("Failed to send legacy message\n");
     ext_exit(1);
   }
-  ext_io_printf("sent legacy message of length %u\n", total_len);
+  ext_io_printf("[INFO] sent legacy message of length %u (payload=%u)\n", total_len,
+                msg_len);
 }
 
 ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,

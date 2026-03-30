@@ -84,7 +84,7 @@ int main(int argc, char *argv[]) {
       int pkt_num = atoi(argv[i]);
       add_drop_packet(pkt_num);
     }
-    
+
     if (mode == MODE_LEGACY_ONLY) {
       set_legacy_only(1);
     }
@@ -139,7 +139,7 @@ void main_arm(void) {
 
   if (mode == MODE_DEFAULT || mode == MODE_LEGACY_ONLY) {
     if (mode == MODE_LEGACY_ONLY) {
-        set_legacy_only(1);
+      set_legacy_only(1);
     }
     int seed;
     ext_io_puts("Seed for RNG:\n");
@@ -184,13 +184,10 @@ void Reset_Handler(void) {
     *dst++ = 0;
   }
 
-  /* Paint stack for profiling */
   stack_paint();
 
-  /* Call main */
   main_arm();
 
-  /* Should never return, but if it does, loop forever */
   while (1) {
     asm volatile("wfi");
   }

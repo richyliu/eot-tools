@@ -31,20 +31,10 @@ static inline uint32_t stack_get_total(void) {
 
 void log_stack_usage(void);
 
-#else
-static inline void stack_paint(void) {}
-static inline uint32_t stack_get_usage(void) { return 0; }
-static inline uint32_t stack_get_total(void) { return 0; }
-static inline void log_stack_usage(void) {}
-#endif
-
-#ifdef EVALUATION
-#include "ext_support.h"
 #include "qemu_tcg_plugins/inscount.h"
 
 #define PROFILE_START(name)                                                    \
   do {                                                                         \
-    ext_io_printf("PROFILE_START: %s\n", #name);                               \
     strlcpy((char *)PROFILE_MAGIC_NAME_START, #name, PROFILE_MAGIC_NAME_SIZE); \
     *(volatile int *)(PROFILE_MAGIC_CONTROL) = 1;                              \
   } while (0)
@@ -52,9 +42,13 @@ static inline void log_stack_usage(void) {}
 #define PROFILE_END(name)                                                      \
   do {                                                                         \
     *(volatile int *)(PROFILE_MAGIC_CONTROL) = 2;                              \
-    ext_io_printf("PROFILE_END: %s\n", #name);                                 \
   } while (0)
 #else
+static inline void stack_paint(void) {}
+static inline uint32_t stack_get_usage(void) { return 0; }
+static inline uint32_t stack_get_total(void) { return 0; }
+static inline void log_stack_usage(void) {}
+
 #define PROFILE_START(name)
 #define PROFILE_END(name)
 #endif

@@ -80,7 +80,6 @@ int uart_read_byte(uart_handle_t *handle, uint8_t *byte) {
       return -1;
     }
     while (!(regs->STATE & UART_STATE_RXFULL)) {
-      ext_timer_sleep_ms(1);
     }
   }
 

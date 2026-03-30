@@ -9,6 +9,7 @@ Runs ./eot and ./hot in parallel, allowing:
 - ARM/QEMU testing with UART socket bridging
 """
 
+import argparse
 import asyncio
 import os
 import re
@@ -20,8 +21,42 @@ from typing import Optional
 from test_utils import TestOrchestrator
 
 
+async def test_timeout(orchestrator: TestOrchestrator) -> None:
+    """Test that pairing timeout returns devices to idle."""
+    orchestrator.print_early_header("test_timeout")
+    await orchestrator.setup("test_timeout")
+    orchestrator.print_header()
+    assert orchestrator.eot is not None
+    assert orchestrator.hot is not None
+
+    try:
+        eot = orchestrator.eot
+        hot = orchestrator.hot
+
+        await eot.assert_output("EOT_IDLE")
+        await hot.assert_output("HOT_IDLE")
+
+        await eot.send_input("1\n")
+
+        if orchestrator.arm_mode:
+            # QEMU (ARM) is slower due to emulation overhead
+            timeout_sec = 40
+        else:
+            timeout_sec = 35
+        orchestrator.log(
+            f"Waiting at most {timeout_sec} seconds for EOT to timeout waiting for HOT advertisement..."
+        )
+        await eot.assert_output("timed out", timeout=timeout_sec)
+
+        orchestrator.log(f"[{orchestrator.elapsed_time():5.2f}s] test_timeout completed successfully")
+
+    finally:
+        await orchestrator.teardown()
+
+
 async def test_full_pairing(orchestrator: TestOrchestrator) -> None:
     """Test complete pairing flow from idle to paired state."""
+    orchestrator.print_early_header("test_full_pairing")
     await orchestrator.setup("test_full_pairing")
     orchestrator.print_header()
     assert orchestrator.eot is not None
@@ -70,7 +105,7 @@ async def test_full_pairing(orchestrator: TestOrchestrator) -> None:
         await eot.send_input("\n")
         await eot.assert_output("Pairing successful")
 
-        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_full_pairing completed successfully")
+        orchestrator.log(f"[{orchestrator.elapsed_time():5.2f}s] test_full_pairing completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -78,6 +113,7 @@ async def test_full_pairing(orchestrator: TestOrchestrator) -> None:
 
 async def test_basic_communication(orchestrator: TestOrchestrator) -> None:
     """Test pairing + status request + emergency brake."""
+    orchestrator.print_early_header("test_basic_communication")
     await orchestrator.setup("test_basic_communication")
     orchestrator.print_header()
     assert orchestrator.eot is not None
@@ -110,7 +146,7 @@ async def test_basic_communication(orchestrator: TestOrchestrator) -> None:
 
         await hot.send_input("1\n")
         await hot.assert_output("sent status update request")
-        await eot.assert_output("sent status update to HOT", timeout=1)
+        await eot.assert_output("sent status update to HOT")
         await hot.assert_output("EOT Status:")
 
         await hot.assert_output("Select an option")
@@ -120,7 +156,7 @@ async def test_basic_communication(orchestrator: TestOrchestrator) -> None:
         await eot.assert_output("Emergency brake activated")
         await hot.assert_output("received emergency brake confirmation")
 
-        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_basic_communication completed successfully")
+        orchestrator.log(f"[{orchestrator.elapsed_time():5.2f}s] test_basic_communication completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -128,6 +164,7 @@ async def test_basic_communication(orchestrator: TestOrchestrator) -> None:
 
 async def test_wrong_pin(orchestrator: TestOrchestrator) -> None:
     """Test that wrong PIN entry fails and returns to idle."""
+    orchestrator.print_early_header("test_wrong_pin")
     await orchestrator.setup("test_wrong_pin")
     orchestrator.print_header()
     assert orchestrator.eot is not None
@@ -152,7 +189,7 @@ async def test_wrong_pin(orchestrator: TestOrchestrator) -> None:
         await hot.assert_output("Failed to enter correct PIN")
         await hot.assert_output("HOT_IDLE")
 
-        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_wrong_pin completed successfully")
+        orchestrator.log(f"[{orchestrator.elapsed_time():5.2f}s] test_wrong_pin completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -160,6 +197,7 @@ async def test_wrong_pin(orchestrator: TestOrchestrator) -> None:
 
 async def test_packet_drop(orchestrator: TestOrchestrator) -> None:
     """Test that packet drops cause timeout and recovery."""
+    orchestrator.print_early_header("test_packet_drop")
     await orchestrator.setup("test_packet_drop", eot_drops=[1])
     orchestrator.print_header()
     assert orchestrator.eot is not None
@@ -182,48 +220,17 @@ async def test_packet_drop(orchestrator: TestOrchestrator) -> None:
         await eot.assert_output("dropping packet 1 for testing")
 
         orchestrator.log(
-            f"[{orchestrator.elapsed_time():.2f}s] test_packet_drop completed successfully (packet drop observed)"
+            f"[{orchestrator.elapsed_time():5.2f}s] test_packet_drop completed successfully (packet drop observed)"
         )
 
     finally:
         await orchestrator.teardown()
 
 
-async def test_timeout(orchestrator: TestOrchestrator) -> None:
-    """Test that pairing timeout returns devices to idle."""
-    await orchestrator.setup("test_timeout")
-    orchestrator.print_header()
-    assert orchestrator.eot is not None
-    assert orchestrator.hot is not None
-
-    try:
-        eot = orchestrator.eot
-        hot = orchestrator.hot
-
-        await eot.assert_output("EOT_IDLE")
-        await hot.assert_output("HOT_IDLE")
-
-        await eot.send_input("1\n")
-
-        if orchestrator.arm_mode:
-            # QEMU (ARM) is slower due to emulation overhead
-            timeout_sec = 40
-        else:
-            timeout_sec = 35
-        orchestrator.log(
-            f"Waiting at most {timeout_sec} seconds for EOT to timeout waiting for HOT advertisement..."
-        )
-        await eot.assert_output("timed out", timeout=timeout_sec)
-
-        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_timeout completed successfully")
-
-    finally:
-        await orchestrator.teardown()
-
-
-async def test_legacy_mode(orchestrator: TestOrchestrator) -> None:
+async def test_legacy_baseline(orchestrator: TestOrchestrator) -> None:
     """Test legacy mode pairing and communication (BOTH devices in legacy_only mode)."""
-    await orchestrator.setup("test_legacy_mode", eot_mode="legacy_only", hot_mode="legacy_only")
+    orchestrator.print_early_header("test_legacy_baseline")
+    await orchestrator.setup("test_legacy_baseline", eot_mode="legacy_only", hot_mode="legacy_only")
     orchestrator.print_header()
     assert orchestrator.eot is not None
     assert orchestrator.hot is not None
@@ -232,49 +239,71 @@ async def test_legacy_mode(orchestrator: TestOrchestrator) -> None:
         eot = orchestrator.eot
         hot = orchestrator.hot
 
-        # Both devices start in legacy mode automatically
         await eot.assert_output("Legacy-only mode: Entering legacy mode")
         await hot.assert_output("Legacy-only mode: waiting for legacy ARM command")
 
-        # HOT enter unit ID to pair with (legacy only mode requires specifying target ID)
         await hot.send_input("12345\n")
         await hot.assert_output("Legacy only mode active for unit ID 12345")
 
-        # Since EOT already sent ARM command on startup, HOT should already be in ARMED mode or about to be.
-        # But wait, EOT sends ARM command on transition to EOT_LEGACY.
-        # Let's ensure EOT sends status
         await eot.send_input("\n")
         await eot.assert_output("TEST button pressed, sending legacy status update")
-
-        # HOT receives status and prompts for ARM NOW
         await hot.assert_output("Received status from EOT 12345")
 
-        # HOT ARM NOW
         await hot.send_input("\n")
         await hot.assert_output("SYSTEM ARMED")
 
-        # HOT request legacy status
         await hot.send_input("1\n")
         await hot.assert_output("Requesting legacy status update")
         await eot.assert_output("Received legacy status request")
         await hot.assert_output("EOT Status:")
 
-        # HOT legacy EB
         await hot.send_input("2\n")
         await hot.assert_output("Sending legacy emergency brake request")
         await eot.assert_output("Received legacy emergency brake request")
         await eot.assert_output("Emergency brake activated")
         await hot.assert_output("Received legacy emergency brake acknowledgment")
 
-        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_legacy_mode completed successfully")
+        orchestrator.log(f"[{orchestrator.elapsed_time():5.2f}s] test_legacy_baseline completed successfully")
 
     finally:
         await orchestrator.teardown()
 
 
-async def test_downgrade_protection(orchestrator: TestOrchestrator) -> None:
-    """Test that modern HOT ignores legacy ARM from legacy EOT."""
-    await orchestrator.setup("test_downgrade_protection", eot_mode="legacy_only", hot_mode="default")
+async def test_modern_downgrade_attempt(orchestrator: TestOrchestrator) -> None:
+    """Both devices are modern. EOT is downgraded manually. HOT should reject the manual EOT ID."""
+    orchestrator.print_early_header("test_modern_downgrade_attempt")
+    await orchestrator.setup("test_modern_downgrade_attempt", eot_mode="default", hot_mode="default")
+    orchestrator.print_header()
+    assert orchestrator.eot is not None
+    assert orchestrator.hot is not None
+
+    try:
+        eot = orchestrator.eot
+        hot = orchestrator.hot
+
+        await eot.assert_output("EOT_IDLE:")
+        await hot.assert_output("HOT_IDLE:")
+
+        await eot.assert_output("2: Hold TEST button for 5 seconds to enter legacy mode")
+        await eot.send_input("2\n")
+        eot_entered = await eot.assert_output(r"EOT entering legacy mode\. Unit ID: (\d{5})")
+        eot_id = re.search(r"Unit ID: (\d{5})", eot_entered).group(1)
+
+        await asyncio.sleep(1) # Let the UPGRADE packet arrive
+
+        await hot.send_input(f"{eot_id}\n")
+        await hot.assert_output("but it supports the new protocol")
+
+        orchestrator.log(f"[{orchestrator.elapsed_time():5.2f}s] test_modern_downgrade_attempt completed successfully")
+
+    finally:
+        await orchestrator.teardown()
+
+
+async def test_eot_legacy_hot_modern(orchestrator: TestOrchestrator) -> None:
+    """EOT is legacy_only, HOT is modern. Should pair and work in legacy mode."""
+    orchestrator.print_early_header("test_eot_legacy_hot_modern")
+    await orchestrator.setup("test_eot_legacy_hot_modern", eot_mode="legacy_only", hot_mode="default")
     orchestrator.print_header()
     assert orchestrator.eot is not None
     assert orchestrator.hot is not None
@@ -284,21 +313,29 @@ async def test_downgrade_protection(orchestrator: TestOrchestrator) -> None:
         hot = orchestrator.hot
 
         await eot.assert_output("Legacy-only mode: Entering legacy mode")
-        await hot.assert_output("HOT_IDLE")
+        await hot.assert_output("HOT_IDLE:")
 
-        # EOT should send ARM command.
-        # HOT should ignore it and log it as a downgrade attempt.
-        await hot.assert_output("ignoring legacy ARM command from unit ID 12345 to prevent downgrade attack")
+        eot_id = "12345" # default for legacy only EOT
+        await hot.send_input(f"{eot_id}\n")
+        await hot.assert_output(f"Entering legacy mode with unit ID {eot_id}")
 
-        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_downgrade_protection completed successfully (HOT correctly ignored legacy ARM)")
+        await eot.send_input("\n")
+        await eot.assert_output("TEST button pressed")
+        await hot.assert_output(f"Received status from EOT {eot_id}")
+
+        await hot.send_input("\n")
+        await hot.assert_output("SYSTEM ARMED")
+
+        orchestrator.log(f"[{orchestrator.elapsed_time():5.2f}s] test_eot_legacy_hot_modern completed successfully")
 
     finally:
         await orchestrator.teardown()
 
 
-async def test_mixed_modes(orchestrator: TestOrchestrator) -> None:
-    """Test that pairing fails when only one side is in legacy_only mode."""
-    await orchestrator.setup("test_mixed_modes", eot_mode="default", hot_mode="legacy_only")
+async def test_eot_modern_hot_legacy(orchestrator: TestOrchestrator) -> None:
+    """EOT is modern, HOT is legacy_only. EOT manually downgrades. Should pair and work."""
+    orchestrator.print_early_header("test_eot_modern_hot_legacy")
+    await orchestrator.setup("test_eot_modern_hot_legacy", eot_mode="default", hot_mode="legacy_only")
     orchestrator.print_header()
     assert orchestrator.eot is not None
     assert orchestrator.hot is not None
@@ -307,21 +344,24 @@ async def test_mixed_modes(orchestrator: TestOrchestrator) -> None:
         eot = orchestrator.eot
         hot = orchestrator.hot
 
-        await eot.assert_output("EOT_IDLE")
         await hot.assert_output("Legacy-only mode: waiting for legacy ARM command")
+        await eot.assert_output("EOT_IDLE:")
 
-        # EOT tries to do modern pairing
-        await eot.send_input("1\n")
-        await eot.assert_output("waiting for HOT advertisement")
+        await eot.send_input("2\n")
+        eot_entered = await eot.assert_output(r"EOT entering legacy mode\. Unit ID: (\d{5})")
+        eot_id = re.search(r"Unit ID: (\d{5})", eot_entered).group(1)
 
-        # HOT is in legacy mode, it won't send advertisements
-        # We wait to make sure HOT doesn't respond to EOT's existence in a way that allows pairing
-        await asyncio.sleep(2)
-        orchestrator.log("Ensuring HOT remains in legacy mode waiting for ARM")
-        # Ensure it didn't transition to any paired state
-        assert "EOT Status" not in str(hot.get_recent_output())
+        await hot.send_input(f"{eot_id}\n")
+        await hot.assert_output(f"Legacy only mode active for unit ID {eot_id}")
 
-        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_mixed_modes completed successfully (Devices failed to pair as expected)")
+        await eot.send_input("\n")
+        await eot.assert_output("TEST button pressed")
+        await hot.assert_output(f"Received status from EOT {eot_id}")
+
+        await hot.send_input("\n")
+        await hot.assert_output("SYSTEM ARMED")
+
+        orchestrator.log(f"[{orchestrator.elapsed_time():5.2f}s] test_eot_modern_hot_legacy completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -333,9 +373,10 @@ TESTS = {
     "wrong_pin": test_wrong_pin,
     "packet_drop": test_packet_drop,
     "timeout": test_timeout,
-    "legacy_mode": test_legacy_mode,
-    "downgrade_protection": test_downgrade_protection,
-    "mixed_modes": test_mixed_modes,
+    "legacy_baseline": test_legacy_baseline,
+    "modern_downgrade_attempt": test_modern_downgrade_attempt,
+    "eot_legacy_hot_modern": test_eot_legacy_hot_modern,
+    "eot_modern_hot_legacy": test_eot_modern_hot_legacy,
 }
 
 
@@ -354,10 +395,10 @@ async def run_tests(
     async def run_single_test(name: str, test_seed: Optional[int]):
         if name not in TESTS:
             print(f"Unknown test: {name}")
-            return name, "SKIPPED", 0.0
+            return name, "SKIPPED", 0.0, []
 
         async with semaphore:
-            orchestrator = TestOrchestrator(arm_mode=arm_mode, seed=test_seed, baud_rate=baud)
+            orchestrator = TestOrchestrator(arm_mode=arm_mode, seed=test_seed, baud_rate=baud, quiet=parallel)
             start_run = time.time()
             try:
                 await TESTS[name](orchestrator)
@@ -423,81 +464,35 @@ async def run_tests(
 
 
 def main():
-    arm_mode = False
-    args = sys.argv[1:]
+    parser = argparse.ArgumentParser(description="Test orchestrator for EOT/HOT device protocol testing.")
+    parser.add_argument("tests", nargs="*", default=["all"], help="Test names to run ('all', 'brief', or specific tests)")
+    parser.add_argument("--arm", action="store_true", help="Run on QEMU/ARM instead of native")
+    parser.add_argument("--seed", type=int, help="Specify a base RNG seed (ARM only)")
+    parser.add_argument("--baud", type=int, default=1200, help="Specify a baud rate for the UART bridge (ARM only, default: 1200)")
+    parser.add_argument("--parallel", action="store_true", help="Run tests in parallel")
+    parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of parallel jobs (default: 1)")
+    args = parser.parse_args()
 
-    if "--arm" in args:
-        arm_mode = True
-        args.remove("--arm")
-
-    seed = None
-    if "--seed" in args:
-        idx = args.index("--seed")
-        if idx + 1 < len(args):
-            try:
-                seed = int(args[idx + 1])
-                args.pop(idx + 1)
-                args.pop(idx)
-            except ValueError:
-                print(f"Error: Invalid seed value '{args[idx+1]}'")
-                sys.exit(1)
-        else:
-            print("Error: --seed requires an integer value")
-            sys.exit(1)
-
-    baud = None
-    if "--baud" in args:
-        idx = args.index("--baud")
-        if idx + 1 < len(args):
-            try:
-                baud = int(args[idx + 1])
-                args.pop(idx + 1)
-                args.pop(idx)
-            except ValueError:
-                print(f"Error: Invalid baud value '{args[idx+1]}'")
-                sys.exit(1)
-        else:
-            print("Error: --baud requires an integer value")
-            sys.exit(1)
-
-    parallel = False
-    if "--parallel" in args:
-        parallel = True
-        args.remove("--parallel")
-
-    jobs = 4
-    if "-j" in args or "--jobs" in args:
-        parallel = True
-        idx = args.index("-j") if "-j" in args else args.index("--jobs")
-        if idx + 1 < len(args):
-            try:
-                jobs = int(args[idx + 1])
-                args.pop(idx + 1)
-                args.pop(idx)
-            except ValueError:
-                # If next arg is not an int, it might be a test name
-                args.pop(idx)
-        else:
-            args.pop(idx)
-
-    if not args or args[0] == "--help" or args[0] == "-h":
-        print(
-            "Usage: python test_orchestrator.py [--arm] [--seed SEED] [--baud BAUD] [--parallel] [-j JOBS] <test_name> [test_name...]"
-        )
-        print(f"Available tests: {', '.join(TESTS.keys())}")
-        print("Use 'all' to run all tests")
-        print("Use 'brief' to run all tests EXCEPT timeout (faster)")
-        print("Use --arm to run on QEMU/ARM instead of native")
-        print("Use --seed to specify a base RNG seed (ARM only)")
-        print("Use --baud to specify a baud rate for the UART bridge (ARM only)")
-        print("Use --parallel or -j [N] to run tests in parallel (default jobs=4)")
-        sys.exit(1)
-
-    test_names = args
+    arm_mode = args.arm
+    seed = args.seed
+    baud = args.baud
+    jobs = args.jobs
+    
+    test_names = args.tests
+    if not test_names:
+        test_names = ["all"]
+        
     if "all" in test_names:
         test_names = list(TESTS.keys())
     elif "brief" in test_names:
         test_names = [name for name in TESTS.keys() if name != "timeout"]
+
+    # Only run in parallel if requested AND we have multiple tests
+    parallel = args.parallel or (jobs > 1 and len(test_names) > 1)
+    
+    # If we decided not to be parallel, force jobs to 1 for the semaphore
+    if not parallel:
+        jobs = 1
 
     # check that binaries have been built
     if not arm_mode:

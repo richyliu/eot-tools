@@ -5,11 +5,12 @@ import re
 import socket
 import time
 import random
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 
-DEFAULT_TIMEOUT = 10.0
+DEFAULT_TIMEOUT = 2.0
 
 
 class BaseDeviceRunner:
@@ -141,6 +142,8 @@ class UnixDeviceRunner(BaseDeviceRunner):
                             self._output_history = self._output_history[-500:]
                         await self._output_queue.put(decoded)
                         self._log_line(log_f, decoded)
+                        elapsed = time.time() - self.start_time
+                        self.log_callback(f"[{elapsed:5.2f}s] [target {self._device_name}] {decoded}")
                 except Exception:
                     break
             if self._transport:
@@ -257,6 +260,8 @@ class QemuDeviceRunner(BaseDeviceRunner):
                             self._output_history = self._output_history[-500:]
                         await self._output_queue.put(decoded)
                         self._log_line(log_f, decoded)
+                        elapsed = time.time() - self.start_time
+                        self.log_callback(f"[{elapsed:5.2f}s] [target {self._device_name}] {decoded}")
                 except Exception:
                     break
 
@@ -329,7 +334,7 @@ class UartBridge:
                     wire_bits = len(data) * 8
                     delay = wire_bits / self.baud_rate
                     await asyncio.sleep(delay)
-                    self.log_callback(f"         [{name}] {wire_bits} bits ({delay:.3f}s)")
+                    self.log_callback(f"         [{name}] {wire_bits} bits ({delay:.3f}s) sets")
 
                 writer.write(data)
                 await writer.drain()
@@ -363,6 +368,7 @@ class TestOrchestrator:
         eot_mode: str = "default",
         hot_mode: str = "default",
         baud_rate: Optional[int] = None,
+        quiet: bool = True,
     ):
         self.eot_bin = eot_bin
         self.hot_bin = hot_bin
@@ -371,12 +377,16 @@ class TestOrchestrator:
         self.eot_mode = eot_mode
         self.hot_mode = hot_mode
         self.baud_rate = baud_rate
-        self._uart_bridge: Optional[UartBridge] = None
+        self.quiet = quiet
+        self._uart_bridge = None
         self._log_messages: List[str] = []
 
     def log(self, message: str) -> None:
         """Log a message for this test run."""
         self._log_messages.append(message)
+        if not self.quiet:
+            print(message)
+            sys.stdout.flush()
 
     def get_logs(self) -> List[str]:
         """Return all logged messages."""
@@ -472,10 +482,13 @@ class TestOrchestrator:
             return time.time() - self.eot.start_time
         return 0.0
 
+    def print_early_header(self, name):
+        """Print brief test header at the start of each test (to log)."""
+        mode_str = " (ARM/QEMU)" if self.arm_mode else ""
+        self.log(f"\n=== Test: {name}{mode_str} ===")
+
     def print_header(self) -> None:
         """Print test header at the start of each test (to log)."""
-        mode_str = " (ARM/QEMU)" if self.arm_mode else ""
-        self.log(f"\n=== Test: {self._test_name}{mode_str} ===")
         if self.log_dir:
             self.log(f"Logs: {self.log_dir}")
         if self.eot:

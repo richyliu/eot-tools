@@ -122,16 +122,6 @@ static void vcpu_tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb) {
 /* ------------------------------------------------------------------ */
 
 static void plugin_exit(qemu_plugin_id_t id, void *p) {
-  g_autoptr(GString) out = g_string_new(NULL);
-
-  for (int i = 0; i < qemu_plugin_num_vcpus(); i++) {
-    g_string_append_printf(out, "cpu %d insns: %" PRIu64 "\n", i,
-                           qemu_plugin_u64_get(insn_count, i));
-  }
-  g_string_append_printf(out, "total insns: %" PRIu64 "\n",
-                         qemu_plugin_u64_sum(insn_count));
-  qemu_plugin_outs(out->str);
-
   qemu_plugin_scoreboard_free(insn_count.score);
   qemu_plugin_scoreboard_free(section_states);
 }
@@ -152,7 +142,6 @@ QEMU_PLUGIN_EXPORT int qemu_plugin_install(qemu_plugin_id_t id,
       qemu_plugin_scoreboard_u64(qemu_plugin_scoreboard_new(sizeof(uint64_t)));
   section_states = qemu_plugin_scoreboard_new(sizeof(SectionState));
 
-  qemu_plugin_outs("plugin start\n");
   qemu_plugin_register_vcpu_tb_trans_cb(id, vcpu_tb_trans);
   qemu_plugin_register_atexit_cb(id, plugin_exit, NULL);
   return 0;

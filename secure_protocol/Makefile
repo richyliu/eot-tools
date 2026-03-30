@@ -90,10 +90,6 @@ arm:
 unix:
 	$(MAKE) TARGET=unix all
 
-ifdef EVALUATION
-CFLAGS += -DEVALUATION
-endif
-
 .PHONY: size
 size:
 	size eot hot

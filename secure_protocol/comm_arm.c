@@ -13,7 +13,7 @@ struct comm_handle {
 static struct comm_handle static_handle;
 
 comm_handle_t *comm_init(comm_device_type_t device_type, uint32_t timeout_ms,
-                        const char *socket_path1, const char *socket_path2) {
+                         const char *socket_path1, const char *socket_path2) {
   (void)socket_path1;
   (void)socket_path2;
   uart_handle_t *uart = uart_init(UART_0);
@@ -71,14 +71,10 @@ ssize_t comm_recv_raw(comm_handle_t *handle, uint8_t *buffer, size_t max_len) {
   uint32_t timeout = handle->timeout_ms;
 
   uint8_t length_bytes[2];
-
   if (uart_read_byte_timeout(uart, &length_bytes[0], timeout) < 0) {
-    ext_io_eprintf("Timeout waiting for length byte 1\n");
     return -1;
   }
-
   if (uart_read_byte_timeout(uart, &length_bytes[1], timeout) < 0) {
-    ext_io_eprintf("Timeout waiting for length byte 2\n");
     return -1;
   }
 

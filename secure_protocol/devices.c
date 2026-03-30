@@ -110,9 +110,10 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           comm_send_legacy(comm, unit_id, (uint8_t *)"ARM", 3);
           break;
         }
-        ext_io_printf("EOT_IDLE (ID: %05u): waiting for user to push TEST button\n", unit_id);
+        ext_io_puts("EOT_IDLE: waiting for user to push TEST button\n");
         ext_io_puts("Options:\n");
         ext_io_puts("  1: Push TEST button to start pairing\n");
+        ext_io_puts("  2: Hold TEST button for 5 seconds to enter legacy mode\n");
         ext_io_puts("Enter choice: ");
         ext_io_flush();
         ext_io_scan_int(&choice);
@@ -120,6 +121,12 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           ext_io_puts("Button pressed, waiting for HOT advertisement...\n");
           timer_now(&adv_start);
           state = EOT_WAIT_ADV;
+        } else if (choice == 2) {
+          ext_io_printf("EOT entering legacy mode. Unit ID: %05u\n", unit_id);
+          state = EOT_LEGACY;
+          timer_now(&last_status_time);
+          comm_send_legacy(comm, unit_id, (uint8_t *)"ARM", 3);
+          comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id, sizeof(unit_id_t), NULL);
         } else {
           ext_io_puts("Invalid choice, staying in idle state.\n");
         }
@@ -158,6 +165,9 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           ext_io_puts("EOT: Sending periodic legacy status update\n");
           get_eot_status(&status);
           comm_send_legacy(comm, unit_id, (uint8_t *)&status, sizeof(status));
+          if (!is_legacy_only()) {
+            comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id, sizeof(unit_id_t), NULL);
+          }
           last_status_time = now;
           next_status_delay_ms = 30000 + (ext_random_u32() % 5000);
         }
@@ -167,6 +177,9 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           ext_io_puts("EOT: TEST button pressed, sending legacy status update\n");
           get_eot_status(&status);
           comm_send_legacy(comm, unit_id, (uint8_t *)&status, sizeof(status));
+          if (!is_legacy_only()) {
+            comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id, sizeof(unit_id_t), NULL);
+          }
           last_status_time = now;
         }
         ext_io_set_nonblocking(0);
@@ -415,6 +428,7 @@ void hot_run(communicator_t *comm) {
             ext_io_printf("Entering legacy mode with unit ID %05u. Waiting for EOT message...\n", choice);
             legacy_unit_id = (unit_id_t)choice;
             state = HOT_LEGACY;
+            timer_now(&pairing_start);
           }
         } else {
           ext_io_puts("Invalid choice, staying in idle state.\n");
@@ -426,6 +440,7 @@ void hot_run(communicator_t *comm) {
         if (ext_io_getline(buf, sizeof(buf)) >= 0) {
             if (timer_diff_ms(&now, &legacy_arm_timer) < 5000) {
                 ext_io_puts("HOT: ARM NOW pressed! SYSTEM ARMED (Legacy Mode)\n");
+                ext_io_printf("HOT: legacy pairing took %d ms\n", timer_diff_ms(&now, &pairing_start));
                 state = HOT_LEGACY_ARMED;
             } else {
                 ext_io_puts("HOT: ARM timer expired or button pressed too early. Wait for EOT status.\n");
@@ -445,6 +460,7 @@ void hot_run(communicator_t *comm) {
         ext_io_scan_int(&choice);
         if (choice == 1) {
           ext_io_puts("HOT: Requesting legacy status update\n");
+          timer_now(&last_transmit_time);
           comm_send_legacy(comm, legacy_unit_id, (uint8_t *)"STAT", 4);
         } else if (choice == 2) {
           ext_io_puts("HOT: Sending legacy emergency brake request\n");
@@ -577,8 +593,13 @@ void hot_run(communicator_t *comm) {
              eot_status_t status;
              ext_memcpy(&status, payload, sizeof(eot_status_t));
              display_eot_status(&status);
+             if (timer_diff_ms(&now, &last_transmit_time) < 10000) {
+                 ext_io_printf("HOT: legacy status update took %d ms\n", timer_diff_ms(&now, &last_transmit_time));
+             } else {
+                 ext_io_puts("HOT: received unsolicited legacy status update\n");
+             }
           } else if (payload_len >= 6 && ext_memcmp(payload, "ACK EB", 6) == 0) {
-             ext_io_puts("HOT: Received legacy emergency brake acknowledgment\n");
+             ext_io_printf("HOT: Received legacy emergency brake acknowledgment. %d ms elapsed since last request.\n", timer_diff_ms(&now, &last_transmit_time));
              state = HOT_LEGACY_ARMED;
           }
         }
@@ -604,6 +625,12 @@ void hot_run(communicator_t *comm) {
         ext_io_printf(
             "HOT: received protocol upgrade request from legacy unit ID %u\n",
             recent_upgradable_legacy_unit_id);
+        if (!is_legacy_only() && (state == HOT_LEGACY || state == HOT_LEGACY_ARMED || state == HOT_WAIT_FOR_LEGACY_EB_ACK) &&
+            recent_upgradable_legacy_unit_id == legacy_unit_id) {
+          ext_io_printf("HOT: Requested to pair in legacy mode with unit ID %05u, "
+                        "but it supports the new protocol. Aborting legacy pairing to prevent downgrade attack.\n", legacy_unit_id);
+          state = HOT_IDLE;
+        }
       }
       switch (state) {
       case HOT_ADV:
