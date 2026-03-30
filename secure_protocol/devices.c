@@ -13,6 +13,12 @@
 #include "ext_support.h"
 #include "profiling.h"
 
+static int g_legacy_only = 0;
+
+void set_legacy_only(int legacy_only) { g_legacy_only = legacy_only; }
+
+int is_legacy_only(void) { return g_legacy_only; }
+
 void get_eot_status(eot_status_t *status) {
   status->batt_cond = 2;
   status->pressure = 100;
@@ -97,10 +103,16 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
     if (recv_len == -1) {
       switch (state) {
       case EOT_IDLE:
+        if (is_legacy_only()) {
+          ext_io_puts("Legacy-only mode: Entering legacy mode and sending legacy ARM command\n");
+          state = EOT_LEGACY;
+          timer_now(&last_status_time);
+          comm_send_legacy(comm, unit_id, (uint8_t *)"ARM", 3);
+          break;
+        }
         ext_io_printf("EOT_IDLE (ID: %05u): waiting for user to push TEST button\n", unit_id);
         ext_io_puts("Options:\n");
         ext_io_puts("  1: Push TEST button to start pairing\n");
-        ext_io_printf("  2: Enter legacy mode (hold TEST button for 5 seconds)\n");
         ext_io_puts("Enter choice: ");
         ext_io_flush();
         ext_io_scan_int(&choice);
@@ -108,13 +120,6 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           ext_io_puts("Button pressed, waiting for HOT advertisement...\n");
           timer_now(&adv_start);
           state = EOT_WAIT_ADV;
-        } else if (choice == 2) {
-          ext_io_puts("Entering legacy mode and sending legacy ARM command\n");
-          state = EOT_LEGACY;
-          timer_now(&last_status_time);
-          comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id,
-                    sizeof(unit_id), NULL);
-          comm_send_legacy(comm, unit_id, (uint8_t *)"ARM", 3);
         } else {
           ext_io_puts("Invalid choice, staying in idle state.\n");
         }
@@ -359,6 +364,19 @@ void hot_run(communicator_t *comm) {
   unit_id_t legacy_unit_id = 0;
   unit_id_t recent_upgradable_legacy_unit_id = 0;
 
+  if (is_legacy_only()) {
+    ext_io_puts("Legacy-only mode: waiting for legacy ARM command...\n");
+    ext_io_puts("Enter 5-digit unit ID to pair with: ");
+    ext_io_flush();
+    while (ext_io_scan_int(&choice) != 0 || choice < 1 || choice > 99999) {
+      ext_io_puts("Invalid ID, enter 5-digit unit ID: ");
+      ext_io_flush();
+    }
+    legacy_unit_id = (unit_id_t)choice;
+    state = HOT_LEGACY;
+    ext_io_printf("HOT: Legacy only mode active for unit ID %05u\n", legacy_unit_id);
+  }
+
   while (1) {
     log_stack_usage();
     if (state == HOT_PAIRED || state == HOT_WAIT_FOR_STATUS ||
@@ -565,10 +583,9 @@ void hot_run(communicator_t *comm) {
           }
         }
       } else {
-        if (recent_upgradable_legacy_unit_id != 0 &&
-            recved_legacy_unit_id == recent_upgradable_legacy_unit_id) {
-          ext_io_printf("HOT: received legacy message from recently upgradable "
-                        "unit ID %u, ignoring to prevent downgrade attack.\n",
+        if (!is_legacy_only()) {
+          ext_io_printf("HOT: modern mode active, ignoring legacy ARM command "
+                        "from unit ID %u to prevent downgrade attack.\n",
                         recved_legacy_unit_id);
         } else if (payload_len >= 3 && ext_memcmp(payload, "ARM", 3) == 0) {
           ext_io_printf("HOT: received legacy ARM command from unit ID %u, "

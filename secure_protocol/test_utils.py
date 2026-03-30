@@ -215,7 +215,7 @@ class QemuDeviceRunner(BaseDeviceRunner):
             raise RuntimeError(f"[{self._device_name}] Process not started")
 
         await self.wait_for_output("Select protocol mode")
-        mode_val = {"default": "0", "test_profile": "1", "test_timing": "2"}.get(self.mode, "0")
+        mode_val = {"default": "0", "test_profile": "1", "test_timing": "2", "legacy_only": "3"}.get(self.mode, "0")
         self.process.stdin.write(f"{mode_val}\n".encode())
         await self.process.stdin.drain()
 
@@ -362,14 +362,16 @@ class TestOrchestrator:
         hot_bin: str = "./hot",
         arm_mode: bool = False,
         seed: Optional[int] = None,
-        mode: str = "default",
+        eot_mode: str = "default",
+        hot_mode: str = "default",
         baud_rate: Optional[int] = None,
     ):
         self.eot_bin = eot_bin
         self.hot_bin = hot_bin
         self.arm_mode = arm_mode
         self.seed = seed
-        self.mode = mode
+        self.eot_mode = eot_mode
+        self.hot_mode = hot_mode
         self.baud_rate = baud_rate
         self.eot: Union[UnixDeviceRunner, QemuDeviceRunner, None] = None
         self.hot: Union[UnixDeviceRunner, QemuDeviceRunner, None] = None
@@ -393,6 +395,8 @@ class TestOrchestrator:
         test_name: str,
         eot_drops: Optional[List[int]] = None,
         hot_drops: Optional[List[int]] = None,
+        eot_mode: Optional[str] = None,
+        hot_mode: Optional[str] = None,
     ) -> None:
         """Initialize test environment and start devices."""
         self._test_name = test_name
@@ -404,15 +408,18 @@ class TestOrchestrator:
         self.log_dir = Path(f"test_logs/{test_name}_{timestamp}")
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
+        e_mode = eot_mode or self.eot_mode
+        h_mode = hot_mode or self.hot_mode
+
         if self.arm_mode:
             # If a base seed is provided, give EOT and HOT different but deterministic seeds
             eot_seed = self.seed if self.seed is None else self.seed
             hot_seed = self.seed if self.seed is None else self.seed + 1
-            self.eot = QemuDeviceRunner("eot", eot_drops, seed=eot_seed, mode=self.mode)
-            self.hot = QemuDeviceRunner("hot", hot_drops, seed=hot_seed, mode=self.mode)
+            self.eot = QemuDeviceRunner("eot", eot_drops, seed=eot_seed, mode=e_mode)
+            self.hot = QemuDeviceRunner("hot", hot_drops, seed=hot_seed, mode=h_mode)
         else:
-            self.eot = UnixDeviceRunner(self.eot_bin, SOCKET_PATHS, eot_drops, mode=self.mode)
-            self.hot = UnixDeviceRunner(self.hot_bin, SOCKET_PATHS, hot_drops, mode=self.mode)
+            self.eot = UnixDeviceRunner(self.eot_bin, SOCKET_PATHS, eot_drops, mode=e_mode)
+            self.hot = UnixDeviceRunner(self.hot_bin, SOCKET_PATHS, hot_drops, mode=h_mode)
 
         await asyncio.gather(
             self.eot.start(self.log_dir),

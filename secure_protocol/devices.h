@@ -191,6 +191,16 @@ void hot_run(communicator_t *comm);
 int eot_main(const char *socket_path1, const char *socket_path2);
 
 /**
+ * Set legacy only mode.
+ */
+void set_legacy_only(int legacy_only);
+
+/**
+ * Get legacy only mode.
+ */
+int is_legacy_only(void);
+
+/**
  * HOT device main entry point.
  * @return 0 on exit
  */

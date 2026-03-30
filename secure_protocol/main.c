@@ -5,7 +5,8 @@
 typedef enum {
   MODE_DEFAULT = 0,
   MODE_TEST_PROFILE = 1,
-  MODE_TEST_TIMING = 2
+  MODE_TEST_TIMING = 2,
+  MODE_LEGACY_ONLY = 3
 } protocol_mode_t;
 
 void test_profile(void) {
@@ -57,13 +58,16 @@ int main(int argc, char *argv[]) {
     } else if (strcmp(argv[1], "test_timing") == 0) {
       mode = MODE_TEST_TIMING;
       arg_start = 2;
+    } else if (strcmp(argv[1], "legacy_only") == 0) {
+      mode = MODE_LEGACY_ONLY;
+      arg_start = 2;
     } else if (strcmp(argv[1], "default") == 0) {
       mode = MODE_DEFAULT;
       arg_start = 2;
     }
   }
 
-  if (mode == MODE_DEFAULT) {
+  if (mode == MODE_DEFAULT || mode == MODE_LEGACY_ONLY) {
     if (argc < arg_start + 2) {
       fprintf(stderr,
               "Usage: %s [mode] <socket1> <socket2> [packet_drops...]\n",
@@ -79,6 +83,10 @@ int main(int argc, char *argv[]) {
     for (int i = arg_start; i < argc; i++) {
       int pkt_num = atoi(argv[i]);
       add_drop_packet(pkt_num);
+    }
+    
+    if (mode == MODE_LEGACY_ONLY) {
+      set_legacy_only(1);
     }
   }
 
@@ -121,6 +129,7 @@ void main_arm(void) {
   ext_io_puts("  0: default\n");
   ext_io_puts("  1: test_profile\n");
   ext_io_puts("  2: test_timing\n");
+  ext_io_puts("  3: legacy_only\n");
   ext_io_puts("Mode: ");
   ext_io_flush();
   if (ext_io_scan_int(&mode_val) != 0) {
@@ -128,7 +137,10 @@ void main_arm(void) {
   }
   protocol_mode_t mode = (protocol_mode_t)mode_val;
 
-  if (mode == MODE_DEFAULT) {
+  if (mode == MODE_DEFAULT || mode == MODE_LEGACY_ONLY) {
+    if (mode == MODE_LEGACY_ONLY) {
+        set_legacy_only(1);
+    }
     int seed;
     ext_io_puts("Seed for RNG:\n");
     ext_io_flush();

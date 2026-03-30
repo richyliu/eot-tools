@@ -222,8 +222,8 @@ async def test_timeout(orchestrator: TestOrchestrator) -> None:
 
 
 async def test_legacy_mode(orchestrator: TestOrchestrator) -> None:
-    """Test legacy mode pairing and communication."""
-    await orchestrator.setup("test_legacy_mode")
+    """Test legacy mode pairing and communication (BOTH devices in legacy_only mode)."""
+    await orchestrator.setup("test_legacy_mode", eot_mode="legacy_only", hot_mode="legacy_only")
     orchestrator.print_header()
     assert orchestrator.eot is not None
     assert orchestrator.hot is not None
@@ -232,18 +232,17 @@ async def test_legacy_mode(orchestrator: TestOrchestrator) -> None:
         eot = orchestrator.eot
         hot = orchestrator.hot
 
-        await eot.assert_output("EOT_IDLE")
-        await hot.assert_output("HOT_IDLE")
+        # Both devices start in legacy mode automatically
+        await eot.assert_output("Legacy-only mode: Entering legacy mode")
+        await hot.assert_output("Legacy-only mode: waiting for legacy ARM command")
 
-        # HOT enter legacy mode with ID 12345
+        # HOT enter unit ID to pair with (legacy only mode requires specifying target ID)
         await hot.send_input("12345\n")
-        await hot.assert_output("Entering legacy mode with unit ID 12345")
+        await hot.assert_output("Legacy only mode active for unit ID 12345")
 
-        # EOT enter legacy mode
-        await eot.send_input("2\n")
-        await eot.assert_output("Entering legacy mode")
-
-        # EOT sends status (manually triggered in our test by pressing enter)
+        # Since EOT already sent ARM command on startup, HOT should already be in ARMED mode or about to be.
+        # But wait, EOT sends ARM command on transition to EOT_LEGACY.
+        # Let's ensure EOT sends status
         await eot.send_input("\n")
         await eot.assert_output("TEST button pressed, sending legacy status update")
 
@@ -273,6 +272,61 @@ async def test_legacy_mode(orchestrator: TestOrchestrator) -> None:
         await orchestrator.teardown()
 
 
+async def test_downgrade_protection(orchestrator: TestOrchestrator) -> None:
+    """Test that modern HOT ignores legacy ARM from legacy EOT."""
+    await orchestrator.setup("test_downgrade_protection", eot_mode="legacy_only", hot_mode="default")
+    orchestrator.print_header()
+    assert orchestrator.eot is not None
+    assert orchestrator.hot is not None
+
+    try:
+        eot = orchestrator.eot
+        hot = orchestrator.hot
+
+        await eot.assert_output("Legacy-only mode: Entering legacy mode")
+        await hot.assert_output("HOT_IDLE")
+
+        # EOT should send ARM command.
+        # HOT should ignore it and log it as a downgrade attempt.
+        await hot.assert_output("ignoring legacy ARM command from unit ID 12345 to prevent downgrade attack")
+
+        print(f"[{orchestrator.elapsed_time():.2f}s] test_downgrade_protection PASSED (HOT correctly ignored legacy ARM)")
+
+    finally:
+        await orchestrator.teardown()
+
+
+async def test_mixed_modes(orchestrator: TestOrchestrator) -> None:
+    """Test that pairing fails when only one side is in legacy_only mode."""
+    await orchestrator.setup("test_mixed_modes", eot_mode="default", hot_mode="legacy_only")
+    orchestrator.print_header()
+    assert orchestrator.eot is not None
+    assert orchestrator.hot is not None
+
+    try:
+        eot = orchestrator.eot
+        hot = orchestrator.hot
+
+        await eot.assert_output("EOT_IDLE")
+        await hot.assert_output("Legacy-only mode: waiting for legacy ARM command")
+
+        # EOT tries to do modern pairing
+        await eot.send_input("1\n")
+        await eot.assert_output("waiting for HOT advertisement")
+
+        # HOT is in legacy mode, it won't send advertisements
+        # We wait to make sure HOT doesn't respond to EOT's existence in a way that allows pairing
+        await asyncio.sleep(2)
+        print("Ensuring HOT remains in legacy mode waiting for ARM")
+        # Ensure it didn't transition to any paired state
+        assert "EOT Status" not in str(hot.get_recent_output())
+
+        print(f"[{orchestrator.elapsed_time():.2f}s] test_mixed_modes PASSED (Devices failed to pair as expected)")
+
+    finally:
+        await orchestrator.teardown()
+
+
 TESTS = {
     "full_pairing": test_full_pairing,
     "basic_communication": test_basic_communication,
@@ -280,6 +334,8 @@ TESTS = {
     "packet_drop": test_packet_drop,
     "timeout": test_timeout,
     "legacy_mode": test_legacy_mode,
+    "downgrade_protection": test_downgrade_protection,
+    "mixed_modes": test_mixed_modes,
 }
 
 
