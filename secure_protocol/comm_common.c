@@ -41,9 +41,9 @@ void comm_send(communicator_t *comm, const session_id_t session_id,
 
   if (shared_secret != NULL) {
     uint8_t signature[SIGNATURE_SIZE];
-    PROFILE_START(HMAC_GEN);
+    profile_start("HMAC_GEN");
     int ok = compute_hmac(shared_secret, buffer, total_len, signature);
-    PROFILE_END(HMAC_GEN);
+    profile_end("HMAC_GEN");
     if (!ok) {
       ext_io_eprintf("Failed to compute HMAC\n");
       ext_exit(1);
@@ -137,10 +137,10 @@ ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,
     }
     uint8_t signature[SIGNATURE_SIZE];
     ext_memcpy(signature, buffer + recv_len - SIGNATURE_SIZE, SIGNATURE_SIZE);
-    PROFILE_START(HMAC_VERIFY);
+    profile_start("HMAC_VERIFY");
     int hmac_ok = verify_hmac(shared_secret, buffer, recv_len - SIGNATURE_SIZE,
                               signature);
-    PROFILE_END(HMAC_VERIFY);
+    profile_end("HMAC_VERIFY");
     if (!hmac_ok) {
       ext_io_eprintf("HMAC verification failed\n");
       return -2;

@@ -11,11 +11,11 @@ typedef enum {
 
 void test_profile(void) {
   ext_io_puts("\n--- Starting Profile Test ---\n");
-  PROFILE_START(test_profile_loop);
+  profile_start("test_profile_loop");
   for (volatile uint32_t i = 0; i < 100000; i++) {
     // Some dummy work to count instructions
   }
-  PROFILE_END(test_profile_loop);
+  profile_end("test_profile_loop");
   ext_io_puts("--- Profile Test Complete ---\n");
 }
 
