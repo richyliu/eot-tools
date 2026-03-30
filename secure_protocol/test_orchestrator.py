@@ -70,7 +70,7 @@ async def test_full_pairing(orchestrator: TestOrchestrator) -> None:
         await eot.send_input("\n")
         await eot.assert_output("Pairing successful")
 
-        print(f"[{orchestrator.elapsed_time():.2f}s] test_full_pairing PASSED")
+        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_full_pairing completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -120,7 +120,7 @@ async def test_basic_communication(orchestrator: TestOrchestrator) -> None:
         await eot.assert_output("Emergency brake activated")
         await hot.assert_output("received emergency brake confirmation")
 
-        print(f"[{orchestrator.elapsed_time():.2f}s] test_basic_communication PASSED")
+        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_basic_communication completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -152,7 +152,7 @@ async def test_wrong_pin(orchestrator: TestOrchestrator) -> None:
         await hot.assert_output("Failed to enter correct PIN")
         await hot.assert_output("HOT_IDLE")
 
-        print(f"[{orchestrator.elapsed_time():.2f}s] test_wrong_pin PASSED")
+        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_wrong_pin completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -181,8 +181,8 @@ async def test_packet_drop(orchestrator: TestOrchestrator) -> None:
 
         await eot.assert_output("dropping packet 1 for testing")
 
-        print(
-            f"[{orchestrator.elapsed_time():.2f}s] test_packet_drop PASSED (packet drop observed)"
+        orchestrator.log(
+            f"[{orchestrator.elapsed_time():.2f}s] test_packet_drop completed successfully (packet drop observed)"
         )
 
     finally:
@@ -210,12 +210,12 @@ async def test_timeout(orchestrator: TestOrchestrator) -> None:
             timeout_sec = 40
         else:
             timeout_sec = 35
-        print(
+        orchestrator.log(
             f"Waiting at most {timeout_sec} seconds for EOT to timeout waiting for HOT advertisement..."
         )
         await eot.assert_output("timed out", timeout=timeout_sec)
 
-        print(f"[{orchestrator.elapsed_time():.2f}s] test_timeout PASSED")
+        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_timeout completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -266,7 +266,7 @@ async def test_legacy_mode(orchestrator: TestOrchestrator) -> None:
         await eot.assert_output("Emergency brake activated")
         await hot.assert_output("Received legacy emergency brake acknowledgment")
 
-        print(f"[{orchestrator.elapsed_time():.2f}s] test_legacy_mode PASSED")
+        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_legacy_mode completed successfully")
 
     finally:
         await orchestrator.teardown()
@@ -290,7 +290,7 @@ async def test_downgrade_protection(orchestrator: TestOrchestrator) -> None:
         # HOT should ignore it and log it as a downgrade attempt.
         await hot.assert_output("ignoring legacy ARM command from unit ID 12345 to prevent downgrade attack")
 
-        print(f"[{orchestrator.elapsed_time():.2f}s] test_downgrade_protection PASSED (HOT correctly ignored legacy ARM)")
+        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_downgrade_protection completed successfully (HOT correctly ignored legacy ARM)")
 
     finally:
         await orchestrator.teardown()
@@ -317,11 +317,11 @@ async def test_mixed_modes(orchestrator: TestOrchestrator) -> None:
         # HOT is in legacy mode, it won't send advertisements
         # We wait to make sure HOT doesn't respond to EOT's existence in a way that allows pairing
         await asyncio.sleep(2)
-        print("Ensuring HOT remains in legacy mode waiting for ARM")
+        orchestrator.log("Ensuring HOT remains in legacy mode waiting for ARM")
         # Ensure it didn't transition to any paired state
         assert "EOT Status" not in str(hot.get_recent_output())
 
-        print(f"[{orchestrator.elapsed_time():.2f}s] test_mixed_modes PASSED (Devices failed to pair as expected)")
+        orchestrator.log(f"[{orchestrator.elapsed_time():.2f}s] test_mixed_modes completed successfully (Devices failed to pair as expected)")
 
     finally:
         await orchestrator.teardown()
@@ -344,43 +344,62 @@ async def run_tests(
     arm_mode: bool = False,
     seed: Optional[int] = None,
     baud: Optional[int] = None,
+    parallel: bool = False,
+    jobs: int = 1,
 ) -> bool:
     """Run specified tests. Returns True if all pass."""
     tests_status = []
+    semaphore = asyncio.Semaphore(jobs if parallel else 1)
 
-    for name in test_names:
+    async def run_single_test(name: str, test_seed: Optional[int]):
         if name not in TESTS:
             print(f"Unknown test: {name}")
-            print(f"Available tests: {', '.join(TESTS.keys())}")
-            tests_status.append((name, "SKIPPED"))
-            continue
+            return name, "SKIPPED", 0.0
 
-        orchestrator = TestOrchestrator(arm_mode=arm_mode, seed=seed, baud_rate=baud)
-        try:
-            await TESTS[name](orchestrator)
-            tests_status.append((name, "PASSED"))
-        except AssertionError as e:
-            print(f"[{orchestrator.elapsed_time():.2f}s] {name} FAILED: {e}")
-            print(f"  Error: {e}")
-            if orchestrator.eot:
-                print("  EOT recent output:")
-                for line in orchestrator.eot.get_recent_output(5):
-                    print(f"    {line}")
-            if orchestrator.hot:
-                print("  HOT recent output:")
-                for line in orchestrator.hot.get_recent_output(5):
-                    print(f"    {line}")
-            tests_status.append((name, "FAILED"))
-        except Exception as e:
-            print(f"[{orchestrator.elapsed_time():.2f}s] {name} ERROR: {e}")
-            tests_status.append((name, "ERROR"))
+        async with semaphore:
+            orchestrator = TestOrchestrator(arm_mode=arm_mode, seed=test_seed, baud_rate=baud)
+            start_run = time.time()
+            try:
+                await TESTS[name](orchestrator)
+                duration = time.time() - start_run
+                print(f"[PASSED] {name} ({duration:.2f}s)")
+                return name, "PASSED", duration, orchestrator.get_logs()
+            except AssertionError as e:
+                duration = time.time() - start_run
+                orchestrator.log(f"{name} FAILED: {e}")
+                print(f"[FAILED] {name} ({duration:.2f}s)")
+                return name, "FAILED", duration, orchestrator.get_logs()
+            except Exception as e:
+                duration = time.time() - start_run
+                orchestrator.log(f"{name} ERROR: {e}")
+                import traceback
+                orchestrator.log(traceback.format_exc())
+                print(f"[ERROR]  {name} ({duration:.2f}s)")
+                return name, "ERROR", duration, orchestrator.get_logs()
+            finally:
+                await orchestrator.teardown()
 
-        await asyncio.sleep(0.2)
+    # Create tasks for all tests
+    tasks = []
+    for i, name in enumerate(test_names):
+        test_seed = seed + (i * 10) if seed is not None else None
+        tasks.append(run_single_test(name, test_seed))
 
-    num_passed = sum(1 for _, status in tests_status if status == "PASSED")
-    num_failed = sum(1 for _, status in tests_status if status == "FAILED")
+    if parallel:
+        results = await asyncio.gather(*tasks)
+    else:
+        results = []
+        for task in tasks:
+            results.append(await task)
+            await asyncio.sleep(0.1)
+
+    for name, status, duration, logs in results:
+        tests_status.append((name, status, logs))
+
+    num_passed = sum(1 for _, status, _ in tests_status if status == "PASSED")
+    num_failed = sum(1 for _, status, _ in tests_status if status == "FAILED")
     num_other = sum(
-        1 for _, status in tests_status if status not in ("PASSED", "FAILED")
+        1 for _, status, _ in tests_status if status not in ("PASSED", "FAILED")
     )
     num_total = len(tests_status)
 
@@ -392,10 +411,13 @@ async def run_tests(
     all_passed = num_passed == num_total
 
     if not all_passed:
-        print("\nFailed/Errored tests:")
-        for name, status in tests_status:
+        print("\n=== Detailed Logs for Failed Tests ===")
+        for name, status, logs in tests_status:
             if status != "PASSED":
-                print(f"  {name}: {status}")
+                print(f"\n--- {name} ({status}) ---")
+                for msg in logs:
+                    print(msg)
+                print("-" * (len(name) + 15))
 
     return all_passed
 
@@ -438,9 +460,29 @@ def main():
             print("Error: --baud requires an integer value")
             sys.exit(1)
 
+    parallel = False
+    if "--parallel" in args:
+        parallel = True
+        args.remove("--parallel")
+
+    jobs = 4
+    if "-j" in args or "--jobs" in args:
+        parallel = True
+        idx = args.index("-j") if "-j" in args else args.index("--jobs")
+        if idx + 1 < len(args):
+            try:
+                jobs = int(args[idx + 1])
+                args.pop(idx + 1)
+                args.pop(idx)
+            except ValueError:
+                # If next arg is not an int, it might be a test name
+                args.pop(idx)
+        else:
+            args.pop(idx)
+
     if not args or args[0] == "--help" or args[0] == "-h":
         print(
-            "Usage: python test_orchestrator.py [--arm] [--seed SEED] [--baud BAUD] <test_name> [test_name...]"
+            "Usage: python test_orchestrator.py [--arm] [--seed SEED] [--baud BAUD] [--parallel] [-j JOBS] <test_name> [test_name...]"
         )
         print(f"Available tests: {', '.join(TESTS.keys())}")
         print("Use 'all' to run all tests")
@@ -448,6 +490,7 @@ def main():
         print("Use --arm to run on QEMU/ARM instead of native")
         print("Use --seed to specify a base RNG seed (ARM only)")
         print("Use --baud to specify a baud rate for the UART bridge (ARM only)")
+        print("Use --parallel or -j [N] to run tests in parallel (default jobs=4)")
         sys.exit(1)
 
     test_names = args
@@ -465,7 +508,7 @@ def main():
             raise FileNotFoundError("Binaries not found. Please build the project first.")
 
 
-    success = asyncio.run(run_tests(test_names, arm_mode=arm_mode, seed=seed, baud=baud))
+    success = asyncio.run(run_tests(test_names, arm_mode=arm_mode, seed=seed, baud=baud, parallel=parallel, jobs=jobs))
     sys.exit(0 if success else 1)
 
 

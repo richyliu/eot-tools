@@ -116,7 +116,7 @@ def main():
         print(f"  Overhead ratio: {((t - p) / t * 100):.1f}%")
 
     print("\n--- 5. Packet-Loss Recovery ---")
-    print("  Check 'test_packet_drop' output above. If it passed, basic drop recovery is successful.")
+    print("  TODO: Implement packet loss recovery testing.")
     
     print("\nDone.")
 

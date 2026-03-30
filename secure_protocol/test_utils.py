@@ -11,15 +11,11 @@ from typing import Optional, List
 
 DEFAULT_TIMEOUT = 10.0
 
-SOCKET_PATHS = [
-    "./tmp_sockets/eot_to_hot.sock",
-    "./tmp_sockets/hot_to_eot.sock",
-]
 
 class BaseDeviceRunner:
     """Base class for device runners (Unix and QEMU)."""
 
-    def __init__(self, device_name: str, mode: str = "default"):
+    def __init__(self, device_name: str, mode: str = "default", log_callback: Optional[callable] = None):
         self._device_name = device_name
         self.mode = mode
         self.process: Optional[asyncio.subprocess.Process] = None
@@ -28,6 +24,7 @@ class BaseDeviceRunner:
         self._output_history: List[str] = []
         self.log_path: Optional[Path] = None
         self.start_time: float = 0.0
+        self.log_callback = log_callback or (lambda x: None)
 
     async def wait_for_output(self, pattern: str, timeout: float = DEFAULT_TIMEOUT) -> str:
         """Wait for a line matching the pattern."""
@@ -52,7 +49,7 @@ class BaseDeviceRunner:
     async def assert_output(self, pattern: str, timeout: float = DEFAULT_TIMEOUT) -> str:
         """Assert that a line matching the pattern appears within timeout."""
         elapsed = time.time() - self.start_time
-        print(f"[{elapsed:5.2f}s] [{self._device_name}] Waiting for pattern: {pattern}")
+        self.log_callback(f"[{elapsed:5.2f}s] [{self._device_name}] Waiting for pattern: {pattern}")
         try:
             return await self.wait_for_output(pattern, timeout)
         except asyncio.TimeoutError:
@@ -78,8 +75,8 @@ class BaseDeviceRunner:
 class UnixDeviceRunner(BaseDeviceRunner):
     """Manages a single device subprocess (eot or hot) on Unix."""
 
-    def __init__(self, executable: str, socket_paths: List[str], packet_drops: Optional[List[int]] = None, mode: str = "default"):
-        super().__init__(Path(executable).stem, mode)
+    def __init__(self, executable: str, socket_paths: List[str], packet_drops: Optional[List[int]] = None, mode: str = "default", log_callback: Optional[callable] = None):
+        super().__init__(Path(executable).stem, mode, log_callback)
         self.executable = executable
         self.socket_paths = socket_paths
         self.packet_drops = packet_drops or []
@@ -180,8 +177,8 @@ class UnixDeviceRunner(BaseDeviceRunner):
 class QemuDeviceRunner(BaseDeviceRunner):
     """Manages a QEMU subprocess with UART communication."""
 
-    def __init__(self, device_type: str, packet_drops: Optional[List[int]] = None, seed: Optional[int] = None, mode: str = "default"):
-        super().__init__(device_type, mode)
+    def __init__(self, device_type: str, packet_drops: Optional[List[int]] = None, seed: Optional[int] = None, mode: str = "default", log_callback: Optional[callable] = None):
+        super().__init__(device_type, mode, log_callback)
         self.packet_drops = packet_drops or []
         self.seed = seed
         self._uart_socket_dir: Optional[str] = None
@@ -219,7 +216,7 @@ class QemuDeviceRunner(BaseDeviceRunner):
         self.process.stdin.write(f"{mode_val}\n".encode())
         await self.process.stdin.drain()
 
-        if self.mode != "default": return
+        if self.mode in ("test_profile", "test_timing"): return
 
         await self.wait_for_output("Seed for RNG:")
         seed = self.seed if self.seed is not None else random.randint(0, 2**31 - 1)
@@ -289,12 +286,13 @@ class QemuDeviceRunner(BaseDeviceRunner):
 
 class UartBridge:
     """Bridges UART sockets between EOT and HOT QEMU instances."""
-    def __init__(self, baud_rate: Optional[int] = None):
+    def __init__(self, baud_rate: Optional[int] = None, log_callback: Optional[callable] = None):
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._eot_writer: Optional[asyncio.StreamWriter] = None
         self._hot_writer: Optional[asyncio.StreamWriter] = None
         self.baud_rate = baud_rate
+        self.log_callback = log_callback or (lambda x: None)
 
     async def _bridge_loop(self, eot_reader: asyncio.StreamReader, hot_reader: asyncio.StreamReader) -> None:
         """Bidirectional forwarding between sockets."""
@@ -331,14 +329,14 @@ class UartBridge:
                     wire_bits = len(data) * 8
                     delay = wire_bits / self.baud_rate
                     await asyncio.sleep(delay)
-                    print(f"         [{name}] {wire_bits} bits ({delay:.3f}s)")
+                    self.log_callback(f"         [{name}] {wire_bits} bits ({delay:.3f}s)")
 
                 writer.write(data)
                 await writer.drain()
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            print(f"[{name}] Bridge error: {e}")
+            self.log_callback(f"[{name}] Bridge error: {e}")
 
     async def stop(self) -> None:
         self._running = False
@@ -373,22 +371,31 @@ class TestOrchestrator:
         self.eot_mode = eot_mode
         self.hot_mode = hot_mode
         self.baud_rate = baud_rate
-        self.eot: Union[UnixDeviceRunner, QemuDeviceRunner, None] = None
-        self.hot: Union[UnixDeviceRunner, QemuDeviceRunner, None] = None
-        self.log_dir: Optional[Path] = None
-        self._test_name: str = "test"
         self._uart_bridge: Optional[UartBridge] = None
+        self._log_messages: List[str] = []
 
-    def _clean_sockets(self) -> None:
-        """Remove existing socket files."""
-        for path in SOCKET_PATHS:
-            p = Path(path)
-            if not p.parent.exists():
-                p.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                p.unlink()
-            except FileNotFoundError:
-                pass
+    def log(self, message: str) -> None:
+        """Log a message for this test run."""
+        self._log_messages.append(message)
+
+    def get_logs(self) -> List[str]:
+        """Return all logged messages."""
+        return self._log_messages
+
+    def _prepare_sockets(self) -> List[str]:
+        """Create a unique directory and return socket paths within it."""
+        import tempfile
+        import shutil
+
+        # Create a unique directory within tmp_sockets
+        os.makedirs("./tmp_sockets", exist_ok=True)
+        self._temp_socket_dir = tempfile.mkdtemp(prefix="test_", dir="./tmp_sockets")
+        
+        socket_paths = [
+            os.path.join(self._temp_socket_dir, "eot_to_hot.sock"),
+            os.path.join(self._temp_socket_dir, "hot_to_eot.sock"),
+        ]
+        return socket_paths
 
     async def setup(
         self,
@@ -401,10 +408,11 @@ class TestOrchestrator:
         """Initialize test environment and start devices."""
         self._test_name = test_name
 
+        socket_paths = []
         if not self.arm_mode:
-            self._clean_sockets()
+            socket_paths = self._prepare_sockets()
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%H%M%S_%f")
         self.log_dir = Path(f"test_logs/{test_name}_{timestamp}")
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -415,11 +423,11 @@ class TestOrchestrator:
             # If a base seed is provided, give EOT and HOT different but deterministic seeds
             eot_seed = self.seed if self.seed is None else self.seed
             hot_seed = self.seed if self.seed is None else self.seed + 1
-            self.eot = QemuDeviceRunner("eot", eot_drops, seed=eot_seed, mode=e_mode)
-            self.hot = QemuDeviceRunner("hot", hot_drops, seed=hot_seed, mode=h_mode)
+            self.eot = QemuDeviceRunner("eot", eot_drops, seed=eot_seed, mode=e_mode, log_callback=self.log)
+            self.hot = QemuDeviceRunner("hot", hot_drops, seed=hot_seed, mode=h_mode, log_callback=self.log)
         else:
-            self.eot = UnixDeviceRunner(self.eot_bin, SOCKET_PATHS, eot_drops, mode=e_mode)
-            self.hot = UnixDeviceRunner(self.hot_bin, SOCKET_PATHS, hot_drops, mode=h_mode)
+            self.eot = UnixDeviceRunner(self.eot_bin, socket_paths, eot_drops, mode=e_mode, log_callback=self.log)
+            self.hot = UnixDeviceRunner(self.hot_bin, socket_paths, hot_drops, mode=h_mode, log_callback=self.log)
 
         await asyncio.gather(
             self.eot.start(self.log_dir),
@@ -431,12 +439,12 @@ class TestOrchestrator:
             eot_socket = getattr(self.eot, "uart_socket_path", None)
             hot_socket = getattr(self.hot, "uart_socket_path", None)
             if eot_socket and hot_socket:
-                self._uart_bridge = UartBridge(baud_rate=self.baud_rate)
+                self._uart_bridge = UartBridge(baud_rate=self.baud_rate, log_callback=self.log)
                 await self._uart_bridge.start(eot_socket, hot_socket)
                 msg = f"UART bridge started: {eot_socket} <-> {hot_socket}"
                 if self.baud_rate:
                     msg += f" (baud rate: {self.baud_rate})"
-                print(msg)
+                self.log(msg)
 
     async def teardown(self) -> None:
         """Stop devices and cleanup."""
@@ -451,6 +459,13 @@ class TestOrchestrator:
         if tasks:
             await asyncio.gather(*tasks)
 
+        if not self.arm_mode and hasattr(self, "_temp_socket_dir"):
+            import shutil
+            try:
+                shutil.rmtree(self._temp_socket_dir)
+            except Exception:
+                pass
+
     def elapsed_time(self) -> float:
         """Get elapsed time since test start."""
         if self.eot:
@@ -458,12 +473,12 @@ class TestOrchestrator:
         return 0.0
 
     def print_header(self) -> None:
-        """Print test header at the start of each test."""
+        """Print test header at the start of each test (to log)."""
         mode_str = " (ARM/QEMU)" if self.arm_mode else ""
-        print(f"\n=== Test: {self._test_name}{mode_str} ===")
+        self.log(f"\n=== Test: {self._test_name}{mode_str} ===")
         if self.log_dir:
-            print(f"Logs: {self.log_dir}")
+            self.log(f"Logs: {self.log_dir}")
         if self.eot:
-            print(f"EOT log: {self.eot.log_path}")
+            self.log(f"EOT log: {self.eot.log_path}")
         if self.hot:
-            print(f"HOT log: {self.hot.log_path}")
+            self.log(f"HOT log: {self.hot.log_path}")
