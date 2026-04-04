@@ -6,7 +6,7 @@ TARGET ?= unix
 
 # Source files (platform-independent)
 CORE_SOURCES = main.c devices.c crypto.c comm_common.c profiling.c
-DEPS = micro-ecc/uECC.c sha256/sha256.c
+DEPS = sha256/sha256.c
 
 ifeq ($(TARGET),arm)
     # ARM toolchain
@@ -19,8 +19,8 @@ ifeq ($(TARGET),arm)
     CFLAGS = $(MCU_FLAGS) -Os -Wall -fomit-frame-pointer -DTARGET_ARM -ffreestanding -nostdlib -g
     LDFLAGS = $(MCU_FLAGS) -nostdlib -T arm_linker.ld
     
-    # micro-ecc optimization for ARM/Thumb-2
-    UECC_FLAGS = -DuECC_OPTIMIZATION_LEVEL=3
+    # X25519 assembly for ARM
+    X25519_OBJ = X25519-Cortex-M4/x25519-cortex-m4-gcc.s
     
     # Use ARM stub implementations
     EXT_SOURCES = comm_arm.c ext_support_arm.c arm_support.c uart.c
@@ -32,14 +32,14 @@ else
     CC = gcc
     CFLAGS = -flto -Os -Wall -DTARGET_UNIX -g
     LDFLAGS = -flto
-    UECC_FLAGS =
+    X25519_OBJ = x25519_portable.c
     EXT_SOURCES = comm_socket.c ext_support.c
     OUTPUT_EOT = eot
     OUTPUT_HOT = hot
 endif
 
 # All sources
-SOURCES = $(CORE_SOURCES) $(EXT_SOURCES)
+SOURCES = $(CORE_SOURCES) $(EXT_SOURCES) $(X25519_OBJ)
 
 # Default target
 .PHONY: all_platforms
@@ -50,14 +50,14 @@ all: $(OUTPUT_EOT) $(OUTPUT_HOT)
 
 # EOT build target
 $(OUTPUT_EOT): $(SOURCES) $(DEPS)
-	$(CC) $(CFLAGS) $(UECC_FLAGS) -DEOT_DEVICE -o $(OUTPUT_EOT) $(SOURCES) $(DEPS) $(LDFLAGS)
+	$(CC) $(CFLAGS) -DEOT_DEVICE -o $(OUTPUT_EOT) $(SOURCES) $(DEPS) $(LDFLAGS)
 ifeq ($(TARGET),arm)
 	$(OBJCOPY) -O binary $(OUTPUT_EOT) eot.bin
 endif
 
 # HOT build target
 $(OUTPUT_HOT): $(SOURCES) $(DEPS)
-	$(CC) $(CFLAGS) $(UECC_FLAGS) -o $(OUTPUT_HOT) $(SOURCES) $(DEPS) $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $(OUTPUT_HOT) $(SOURCES) $(DEPS) $(LDFLAGS)
 ifeq ($(TARGET),arm)
 	$(OBJCOPY) -O binary $(OUTPUT_HOT) hot.bin
 endif

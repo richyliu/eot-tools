@@ -1,11 +1,19 @@
-/**
- * Cryptographic functions implementation for EOT/HOT protocol.
- */
-
 #include "crypto.h"
 #include "ext_support.h"
-#include "micro-ecc/uECC.h"
 #include "sha256/sha256.h"
+
+#ifdef TARGET_ARM
+#include "X25519-Cortex-M4/x25519-cortex-m4.h"
+#else
+// Forward declaration for portable version
+void curve25519_scalarmult(uint8_t result[32], const uint8_t scalar[32], const uint8_t point[32]);
+#define X25519_calc_public_key(output_public_key, input_secret_key) do { \
+    static const uint8_t basepoint[32] = {9}; \
+    curve25519_scalarmult(output_public_key, input_secret_key, basepoint); \
+} while(0)
+#define X25519_calc_shared_secret(output_shared_secret, my_secret_key, their_public_key) \
+    curve25519_scalarmult(output_shared_secret, my_secret_key, their_public_key)
+#endif
 
 void sha256_hash(const uint8_t *data, size_t len, uint8_t *hash_out) {
   struct sha256_buff buff;
@@ -16,14 +24,18 @@ void sha256_hash(const uint8_t *data, size_t len, uint8_t *hash_out) {
 }
 
 int generate_keypair(keypair_t *keypair) {
-  return uECC_make_key(keypair->public_key, keypair->private_key, ECC_CURVE);
+  if (ext_random_bytes(keypair->private_key, PRIVKEY_SIZE) != 0) {
+    return 0;
+  }
+  X25519_calc_public_key(keypair->public_key, keypair->private_key);
+  return 1;
 }
 
 int compute_shared_secret(const uint8_t *private_key,
                           const uint8_t *peer_public_key,
                           uint8_t *shared_secret) {
-  return uECC_shared_secret(peer_public_key, private_key, shared_secret,
-                            ECC_CURVE);
+  X25519_calc_shared_secret(shared_secret, private_key, peer_public_key);
+  return 1;
 }
 
 int compute_hmac(const uint8_t *shared_secret, const uint8_t *message,
@@ -77,18 +89,8 @@ int verify_commitment(const nonce_t *nonce, const commitment_t *commitment) {
                     COMMITMENT_SIZE) == 0;
 }
 
-void compress_pubkey(const uint8_t *pubkey, uint8_t *compressed) {
-  uECC_compress(pubkey, compressed, ECC_CURVE);
-}
-
-int decompress_pubkey(const uint8_t *compressed, uint8_t *pubkey) {
-  uECC_decompress(compressed, pubkey, ECC_CURVE);
-  if (!uECC_valid_public_key(pubkey, ECC_CURVE)) {
-    ext_io_printf("Invalid public key after decompression\n");
-    return 0;
-  }
-  return 1;
-}
+// compress_pubkey and decompress_pubkey are no longer needed for Curve25519
+// since the public key is already its own X-coordinate representation.
 
 void generate_nonce(nonce_t *nonce) {
   if (ext_random_bytes(nonce->data, NONCE_SIZE) != 0) {

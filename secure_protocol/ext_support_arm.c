@@ -14,7 +14,6 @@
 
 #define NANOPRINTF_IMPLEMENTATION
 #include "ext_support.h"
-#include "micro-ecc/uECC.h"
 #include "nanoprintf.h"
 #include "uart.h"
 #include <stddef.h>
@@ -391,8 +390,6 @@ int uECC_RNG_func(uint8_t *dest, unsigned size) {
 }
 
 int ext_random_init(uint32_t seed) {
-  uECC_set_rng(uECC_RNG_func);
-
   if (seed != 0) {
     prng_state = seed;
   } else {

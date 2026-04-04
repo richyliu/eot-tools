@@ -14,10 +14,8 @@
 extern "C" {
 #endif
 
-#define ECC_CURVE uECC_secp256r1()
 #define CURVE_SIZE 32
-#define PUBKEY_SIZE (CURVE_SIZE * 2)
-#define COMPRESSED_PUBKEY_SIZE (CURVE_SIZE + 1)
+#define PUBKEY_SIZE CURVE_SIZE
 #define PRIVKEY_SIZE CURVE_SIZE
 #define SHARED_SECRET_SIZE CURVE_SIZE
 #define SIGNATURE_SIZE 6
@@ -62,7 +60,7 @@ typedef uint32_t pin_t;
 void sha256_hash(const uint8_t *data, size_t len, uint8_t *hash_out);
 
 /**
- * Generate a new ECC keypair using the secp256r1 curve.
+ * Generate a new Curve25519 keypair.
  *
  * @param keypair Pointer to a keypair_t struct to hold the generated keys.
  * @return 1 on success, 0 on failure.
@@ -70,10 +68,10 @@ void sha256_hash(const uint8_t *data, size_t len, uint8_t *hash_out);
 int generate_keypair(keypair_t *keypair);
 
 /**
- * Compute a shared secret using ECDH.
+ * Compute a shared secret using X25519.
  *
  * @param private_key Pointer to the private key (32 bytes)
- * @param peer_public_key Pointer to the peer's public key (64 bytes)
+ * @param peer_public_key Pointer to the peer's public key (32 bytes)
  * @param shared_secret Buffer to store the shared secret (32 bytes)
  * @return 1 on success, 0 on failure.
  */
@@ -124,22 +122,8 @@ void create_commitment(const nonce_t *nonce, commitment_t *commitment);
  */
 int verify_commitment(const nonce_t *nonce, const commitment_t *commitment);
 
-/**
- * Compress an ECC public key to compressed form.
- *
- * @param pubkey Pointer to the uncompressed public key (64 bytes)
- * @param compressed Buffer to store the compressed public key (33 bytes)
- */
-void compress_pubkey(const uint8_t *pubkey, uint8_t *compressed);
-
-/**
- * Decompress a compressed ECC public key.
- *
- * @param compressed Pointer to the compressed public key (33 bytes)
- * @param pubkey Buffer to store the uncompressed public key (64 bytes)
- * @return 1 on success, 0 if the key is invalid
- */
-int decompress_pubkey(const uint8_t *compressed, uint8_t *pubkey);
+// compress_pubkey and decompress_pubkey are no longer needed for Curve25519
+// since the public key is already its own X-coordinate representation.
 
 /**
  * Generate a random nonce using the ext_random abstraction.

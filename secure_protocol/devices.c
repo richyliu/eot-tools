@@ -242,12 +242,8 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
             ext_io_eprintf("Failed to generate EOT keypair\n");
             ext_exit(1);
           }
-          uint8_t compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
-          profile_start("EOT_COMPRESS_PUBKEY");
-          compress_pubkey(conn.eot_keys.public_key, compressed_pubkey);
-          profile_end("EOT_COMPRESS_PUBKEY");
           comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_PUBKEY,
-                    compressed_pubkey, sizeof(compressed_pubkey), NULL);
+                    conn.eot_keys.public_key, PUBKEY_SIZE, NULL);
           ext_io_puts("EOT: sent public key to HOT, waiting for their pubkey "
                       "and commitment...\n");
           state = EOT_KEY_EX_1;
@@ -256,21 +252,10 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
       case EOT_KEY_EX_1:
         if (msg_type == HOT_MSG_PUBKEY_AND_COMMIT &&
             recved_session_id == conn.session_id &&
-            recv_len == (ssize_t)(COMPRESSED_PUBKEY_SIZE + COMMITMENT_SIZE)) {
-          uint8_t hot_compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
-          ext_memcpy(hot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
-          ext_memcpy(conn.hot_commitment.data, msg + COMPRESSED_PUBKEY_SIZE,
+            recv_len == (ssize_t)(PUBKEY_SIZE + COMMITMENT_SIZE)) {
+          ext_memcpy(conn.hot_keys.public_key, msg, PUBKEY_SIZE);
+          ext_memcpy(conn.hot_commitment.data, msg + PUBKEY_SIZE,
                      COMMITMENT_SIZE);
-          profile_start("EOT_DECOMPRESS_PUBKEY");
-          int valid = decompress_pubkey(hot_compressed_pubkey,
-                                        conn.hot_keys.public_key);
-          profile_end("EOT_DECOMPRESS_PUBKEY");
-          if (!valid) {
-            ext_io_puts(
-                "EOT: Invalid HOT public key received, aborting connection.\n");
-            state = EOT_IDLE;
-            break;
-          }
           ext_io_puts(
               "EOT: received HOT pubkey and commitment, generating nonce...\n");
           generate_nonce(&conn.eot_nonce);
@@ -635,15 +620,12 @@ void hot_run(communicator_t *comm) {
       switch (state) {
       case HOT_ADV:
         if (msg_type == EOT_MSG_PUBKEY &&
-            recved_session_id == conn.session_id) {
+            recved_session_id == conn.session_id &&
+            recv_len == (ssize_t)PUBKEY_SIZE) {
           ext_io_puts("HOT: received EOT pubkey, initiating connection...\n");
           timer_now(&pairing_start);
 
-          uint8_t eot_compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
-          ext_memcpy(eot_compressed_pubkey, msg, COMPRESSED_PUBKEY_SIZE);
-          profile_start("HOT_DECOMPRESS_PUBKEY");
-          decompress_pubkey(eot_compressed_pubkey, conn.eot_keys.public_key);
-          profile_end("HOT_DECOMPRESS_PUBKEY");
+          ext_memcpy(conn.eot_keys.public_key, msg, PUBKEY_SIZE);
 
           profile_start("HOT_KEYGEN");
           int keygen_ok = generate_keypair(&conn.hot_keys);
@@ -656,13 +638,9 @@ void hot_run(communicator_t *comm) {
           profile_start("HOT_CREATE_COMMITMENT");
           create_commitment(&conn.hot_nonce, &conn.hot_commitment);
           profile_end("HOT_CREATE_COMMITMENT");
-          uint8_t compressed_pubkey[COMPRESSED_PUBKEY_SIZE];
-          profile_start("HOT_COMPRESS_PUBKEY");
-          compress_pubkey(conn.hot_keys.public_key, compressed_pubkey);
-          profile_end("HOT_COMPRESS_PUBKEY");
-          uint8_t payload[COMPRESSED_PUBKEY_SIZE + COMMITMENT_SIZE];
-          ext_memcpy(payload, compressed_pubkey, COMPRESSED_PUBKEY_SIZE);
-          ext_memcpy(payload + COMPRESSED_PUBKEY_SIZE, conn.hot_commitment.data,
+          uint8_t payload[PUBKEY_SIZE + COMMITMENT_SIZE];
+          ext_memcpy(payload, conn.hot_keys.public_key, PUBKEY_SIZE);
+          ext_memcpy(payload + PUBKEY_SIZE, conn.hot_commitment.data,
                      COMMITMENT_SIZE);
           comm_send(comm, conn.session_id,
                     (msg_type_t)HOT_MSG_PUBKEY_AND_COMMIT, payload,
