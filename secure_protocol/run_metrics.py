@@ -160,9 +160,17 @@ def main():
     legacy_metrics = parse_metrics_from_dir(latest_legacy_dir)
 
     def print_comparison_table(modern, legacy):
-        print("\n" + "="*95)
-        print(f" {'Metric':<20} | {'Scenario':<20} | {'Modern Protocol':<22} | {'Legacy Baseline':<22}")
-        print("-" * 95)
+        def get_change(m, l):
+            if l == 0:
+                return "N/A"
+            change = ((m - l) / l) * 100
+            return f"{change:>+8.1f}%"
+
+        header = f" {'Metric':<18} | {'Scenario':<18} | {'Legacy':>14} | {'Modern':>14} | {'Change (%)':>12}"
+        width = len(header) + 1
+        print("\n" + "="*width)
+        print(header)
+        print("-" * width)
         
         scenarios = [
             ("pairing", "Pairing"),
@@ -174,23 +182,26 @@ def main():
         for s_key, s_name in scenarios:
             m_val = modern["bandwidth"].get(s_key, 0) * 8
             l_val = legacy["bandwidth"].get(s_key, 0) * 8 if legacy else 0
-            print(f" {'Bandwidth':<20} | {s_name:<20} | {m_val:>10} bits        | {l_val:>10} bits")
+            change = get_change(m_val, l_val)
+            print(f" {'Bandwidth':<18} | {s_name:<18} | [{l_val:>4}] , [{m_val:>4}] , [{change:>6}],")
         
-        print("-" * 95)
+        print("-" * width)
         # 2. Latency
         for s_key, s_name in scenarios:
             m_val = modern["latency"].get(s_key, 0)
             l_val = legacy["latency"].get(s_key, 0) if legacy else 0
-            print(f" {'Latency':<20} | {s_name:<20} | {m_val:>10} ms          | {l_val:>10} ms")
+            change = get_change(m_val, l_val)
+            print(f" {'Latency':<18} | {s_name:<18} | [{l_val:>4}] , [{m_val:>4}] , [{change:>6}],")
 
-        print("-" * 95)
+        print("-" * width)
         # 3. Stack Usage
         for s_key, s_name in scenarios:
             m_val = modern["stack"].get(s_key, 0)
             l_val = legacy["stack"].get(s_key, 0) if legacy else 0
-            print(f" {'Max Stack':<20} | {s_name:<20} | {m_val:>10} bytes       | {l_val:>10} bytes")
+            change = get_change(m_val, l_val)
+            print(f" {'Max Stack':<18} | {s_name:<18} | [{l_val:>4}] , [{m_val:>4}] , [{change:>6}],")
         
-        print("="*95 + "\n")
+        print("="*width + "\n")
 
     if basic_metrics:
         print_comparison_table(basic_metrics, legacy_metrics)
