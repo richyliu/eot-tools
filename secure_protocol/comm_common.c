@@ -17,7 +17,8 @@ static int pkt_dropped[10];
 
 void comm_send(communicator_t *comm, const session_id_t session_id,
                const msg_type_t msg_type, const uint8_t *msg,
-               const size_t msg_len, const uint8_t *shared_secret) {
+               const size_t msg_len, const uint8_t *shared_secret,
+               const char *scenario) {
   static int pkt_ctr = 0;
   pkt_ctr++;
   for (int i = 0; i < (int)(sizeof(pkt_dropped) / sizeof(pkt_dropped[0]));
@@ -58,8 +59,10 @@ void comm_send(communicator_t *comm, const session_id_t session_id,
   }
 
   ext_io_printf("[INFO] sending message of length %u (payload=%u) "
-                "(session_id=%u, msg_type=%d)",
+                "(session_id=%u, msg_type=%d)\n",
                 total_len, msg_len, session_id, msg_type);
+  ext_io_printf("[METRIC] type=modern scenario=%s bits=%u\n",
+                scenario ? scenario : "other", (uint32_t)(total_len * 8));
   ext_io_flush();
   for (int i = 0; i < (int)(total_len / 5); i++) {
     ext_timer_sleep_ms(5 * 15);
@@ -75,7 +78,8 @@ void comm_send(communicator_t *comm, const session_id_t session_id,
 }
 
 void comm_send_legacy(communicator_t *comm, const unit_id_t unit_id,
-                      const uint8_t *msg, const size_t msg_len) {
+                      const uint8_t *msg, const size_t msg_len,
+                      const char *scenario) {
   uint32_t legacy_header;
   ext_memcpy(&legacy_header, "OLD!", 4);
   size_t total_len = sizeof(legacy_header) + sizeof(unit_id_t) + msg_len;
@@ -93,6 +97,8 @@ void comm_send_legacy(communicator_t *comm, const unit_id_t unit_id,
   }
   ext_io_printf("[INFO] sent legacy message of length %u (payload=%u)\n",
                 total_len, msg_len);
+  ext_io_printf("[METRIC] type=legacy scenario=%s bits=%u\n",
+                scenario ? scenario : "other", (uint32_t)(total_len * 8));
 }
 
 ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,

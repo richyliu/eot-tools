@@ -72,7 +72,8 @@ void wait_for_arm_button_press(void) {
 static void send_padded_legacy_message(communicator_t *comm, unit_id_t unit_id,
                                        const uint8_t *payload,
                                        size_t payload_len,
-                                       size_t padded_len_bits) {
+                                       size_t padded_len_bits,
+                                       const char *scenario) {
   // subtract 10 for unit_id (4 bytes), message length (4 bytes) and UART len (2
   // bytes)
   size_t actual_len = padded_len_bits / 8 - 10;
@@ -84,7 +85,7 @@ static void send_padded_legacy_message(communicator_t *comm, unit_id_t unit_id,
   uint8_t transmit_buffer[actual_len];
   ext_memset(transmit_buffer, 0, sizeof(transmit_buffer));
   ext_memcpy(transmit_buffer, payload, payload_len);
-  comm_send_legacy(comm, unit_id, transmit_buffer, sizeof(transmit_buffer));
+  comm_send_legacy(comm, unit_id, transmit_buffer, sizeof(transmit_buffer), scenario);
   ext_io_printf("[INFO] sent padded legacy message of actual length %d "
                 "(desired %d bits)\n",
                 sizeof(transmit_buffer), padded_len_bits);
@@ -129,7 +130,7 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           state = EOT_LEGACY;
           timer_now(&last_status_time);
           send_padded_legacy_message(comm, unit_id, (uint8_t *)"ARM", 3,
-                                     EOT_LEGACY_MSG_LEN_BITS);
+                                     EOT_LEGACY_MSG_LEN_BITS, "pairing");
           break;
         }
         ext_io_puts("EOT_IDLE: waiting for user to push TEST button\n");
@@ -149,9 +150,9 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           state = EOT_LEGACY;
           timer_now(&last_status_time);
           send_padded_legacy_message(comm, unit_id, (uint8_t *)"ARM", 3,
-                                     EOT_LEGACY_MSG_LEN_BITS);
+                                     EOT_LEGACY_MSG_LEN_BITS, "pairing");
           comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id,
-                    sizeof(unit_id_t), NULL);
+                    sizeof(unit_id_t), NULL, "pairing");
         } else {
           ext_io_puts("Invalid choice, staying in idle state.\n");
         }
@@ -190,10 +191,10 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           ext_io_puts("EOT: Sending periodic legacy status update\n");
           get_eot_status(&status);
           send_padded_legacy_message(comm, unit_id, (uint8_t *)&status,
-                                     sizeof(status), EOT_LEGACY_MSG_LEN_BITS);
+                                     sizeof(status), EOT_LEGACY_MSG_LEN_BITS, "status_request");
           if (!is_legacy_only()) {
             comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id,
-                      sizeof(unit_id_t), NULL);
+                      sizeof(unit_id_t), NULL, "pairing");
           }
           last_status_time = now;
           next_status_delay_ms = 30000 + (ext_random_u32() % 5000);
@@ -205,10 +206,10 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
               "EOT: TEST button pressed, sending legacy status update\n");
           get_eot_status(&status);
           send_padded_legacy_message(comm, unit_id, (uint8_t *)&status,
-                                     sizeof(status), EOT_LEGACY_MSG_LEN_BITS);
+                                     sizeof(status), EOT_LEGACY_MSG_LEN_BITS, "status_request");
           if (!is_legacy_only()) {
             comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id,
-                      sizeof(unit_id_t), NULL);
+                      sizeof(unit_id_t), NULL, "pairing");
           }
           last_status_time = now;
         }
@@ -248,12 +249,12 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
         ext_io_puts("EOT: Received legacy status request\n");
         get_eot_status(&status);
         send_padded_legacy_message(comm, unit_id, (uint8_t *)&status,
-                                   sizeof(status), EOT_LEGACY_MSG_LEN_BITS);
+                                   sizeof(status), EOT_LEGACY_MSG_LEN_BITS, "status_request");
       } else if (payload_len >= 2 && ext_memcmp(payload, "EB", 2) == 0) {
         ext_io_puts("EOT: Received legacy emergency brake request\n");
         eot_emergency_brake();
         send_padded_legacy_message(comm, unit_id, (uint8_t *)"ACK EB", 6,
-                                   EOT_LEGACY_MSG_LEN_BITS);
+                                   EOT_LEGACY_MSG_LEN_BITS, "emergency_brake");
       } else {
         ext_io_printf("EOT: Received unknown legacy message (payload_len=%d)\n",
                       payload_len);
@@ -278,7 +279,7 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
             ext_exit(1);
           }
           comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_PUBKEY,
-                    conn.eot_keys.public_key, PUBKEY_SIZE, NULL);
+                    conn.eot_keys.public_key, PUBKEY_SIZE, NULL, "pairing");
           ext_io_puts("EOT: sent public key to HOT, waiting for their pubkey "
                       "and commitment...\n");
           state = EOT_KEY_EX_1;
@@ -295,7 +296,7 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
               "EOT: received HOT pubkey and commitment, generating nonce...\n");
           generate_nonce(&conn.eot_nonce);
           comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_NONCE,
-                    conn.eot_nonce.data, sizeof(conn.eot_nonce.data), NULL);
+                    conn.eot_nonce.data, sizeof(conn.eot_nonce.data), NULL, "pairing");
           ext_io_puts("EOT: sent nonce to HOT, waiting for their nonce...\n");
           state = EOT_KEY_EX_2;
         }
@@ -354,12 +355,12 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           if (msg_type == HOT_MSG_STATUS) {
             get_eot_status(&status);
             comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_STATUS,
-                      (uint8_t *)&status, sizeof(status), conn.shared_secret);
+                      (uint8_t *)&status, sizeof(status), conn.shared_secret, "status_request");
             ext_io_puts("EOT: sent status update to HOT.\n");
           } else if (msg_type == HOT_MSG_EMERGENCY) {
             eot_emergency_brake();
             comm_send(comm, conn.session_id, (msg_type_t)EOT_MSG_EMERGENCY,
-                      NULL, 0, conn.shared_secret);
+                      NULL, 0, conn.shared_secret, "emergency_brake");
             ext_io_puts("EOT: sent emergency brake confirmation to HOT.\n");
           } else if (msg_type == HOT_MSG_DISCONNECT) {
             ext_io_puts("EOT: received disconnect\n");
@@ -487,13 +488,13 @@ void hot_run(communicator_t *comm) {
           ext_io_puts("HOT: Requesting legacy status update\n");
           timer_now(&last_transmit_time);
           send_padded_legacy_message(comm, legacy_unit_id, (uint8_t *)"STAT", 4,
-                                     HOT_LEGACY_MSG_LEN_BITS);
+                                     HOT_LEGACY_MSG_LEN_BITS, "status_request");
           state = HOT_WAIT_FOR_LEGACY_STATUS_ACK;
           timer_now(&last_transmit_time);
         } else if (choice == 2) {
           ext_io_puts("HOT: Sending legacy emergency brake request\n");
           send_padded_legacy_message(comm, legacy_unit_id, (uint8_t *)"EB", 2,
-                                     HOT_LEGACY_MSG_LEN_BITS);
+                                     HOT_LEGACY_MSG_LEN_BITS, "emergency_brake");
           state = HOT_WAIT_FOR_LEGACY_EB_ACK;
           timer_now(&last_transmit_time);
         } else if (choice == 3) {
@@ -512,14 +513,14 @@ void hot_run(communicator_t *comm) {
         if (timer_diff_ms(&now, &last_transmit_time) >= 10000) {
           ext_io_puts("HOT: Retransmitting legacy emergency brake request\n");
           send_padded_legacy_message(comm, legacy_unit_id, (uint8_t *)"EB", 2,
-                                     HOT_LEGACY_MSG_LEN_BITS);
+                                     HOT_LEGACY_MSG_LEN_BITS, "emergency_brake");
           timer_now(&last_transmit_time);
         }
         break;
       case HOT_ADV:
         if (timer_diff_ms(&now, &last_adv_time) >= HOT_ADV_INTERVAL_MS) {
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_ADV, NULL, 0,
-                    NULL);
+                    NULL, "pairing");
           last_adv_time = now;
           ext_io_puts("HOT: sent advertisement\n");
         }
@@ -569,18 +570,18 @@ void hot_run(communicator_t *comm) {
         conn.ctr++;
         if (choice == 1) {
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_STATUS,
-                    (uint8_t *)&conn.ctr, sizeof(conn.ctr), conn.shared_secret);
+                    (uint8_t *)&conn.ctr, sizeof(conn.ctr), conn.shared_secret, "status_request");
           ext_io_puts("HOT: sent status update request\n");
           state = HOT_WAIT_FOR_STATUS;
         } else if (choice == 2) {
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_EMERGENCY,
-                    (uint8_t *)&conn.ctr, sizeof(conn.ctr), conn.shared_secret);
+                    (uint8_t *)&conn.ctr, sizeof(conn.ctr), conn.shared_secret, "emergency_brake");
           ext_io_puts("HOT: sent emergency brake request\n");
           state = HOT_WAIT_FOR_EMERGENCY;
         } else if (choice == 3) {
           ext_io_puts("HOT: Disconnecting...\n");
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_DISCONNECT,
-                    (uint8_t *)&conn.ctr, sizeof(conn.ctr), conn.shared_secret);
+                    (uint8_t *)&conn.ctr, sizeof(conn.ctr), conn.shared_secret, "other");
           state = HOT_IDLE;
           ext_memset(&conn, 0, sizeof(conn));
         } else {
@@ -596,12 +597,12 @@ void hot_run(communicator_t *comm) {
           if (state == HOT_WAIT_FOR_STATUS) {
             comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_STATUS,
                       (uint8_t *)&conn.ctr, sizeof(conn.ctr),
-                      conn.shared_secret);
+                      conn.shared_secret, "status_request");
             ext_io_puts("HOT: retransmitted status update request\n");
           } else if (state == HOT_WAIT_FOR_EMERGENCY) {
             comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_EMERGENCY,
                       (uint8_t *)&conn.ctr, sizeof(conn.ctr),
-                      conn.shared_secret);
+                      conn.shared_secret, "emergency_brake");
             ext_io_puts("HOT: retransmitted emergency brake request\n");
           }
           last_transmit_time = now;
@@ -720,7 +721,7 @@ void hot_run(communicator_t *comm) {
                      COMMITMENT_SIZE);
           comm_send(comm, conn.session_id,
                     (msg_type_t)HOT_MSG_PUBKEY_AND_COMMIT, payload,
-                    sizeof(payload), NULL);
+                    sizeof(payload), NULL, "pairing");
 
           ext_io_puts("HOT: sent pubkey and commitment to EOT, waiting for "
                       "their nonce...\n");
@@ -742,7 +743,7 @@ void hot_run(communicator_t *comm) {
                                 conn.eot_keys.public_key, conn.shared_secret);
           profile_end("HOT_COMPUTE_SHARED");
           comm_send(comm, conn.session_id, (msg_type_t)HOT_MSG_NONCE,
-                    conn.hot_nonce.data, sizeof(conn.hot_nonce.data), NULL);
+                    conn.hot_nonce.data, sizeof(conn.hot_nonce.data), NULL, "pairing");
           ext_io_puts(
               "HOT: sent nonce to EOT, waiting for user to input PIN...\n");
           state = HOT_WAIT_FOR_PIN;

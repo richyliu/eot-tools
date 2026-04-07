@@ -101,7 +101,8 @@ typedef struct {
  */
 void comm_send(communicator_t *comm, const session_id_t session_id,
                const msg_type_t msg_type, const uint8_t *msg,
-               const size_t msg_len, const uint8_t *shared_secret);
+               const size_t msg_len, const uint8_t *shared_secret,
+               const char *scenario);
 
 /**
  * Send a legacy (old protocol) message.
@@ -111,7 +112,8 @@ void comm_send(communicator_t *comm, const session_id_t session_id,
  * @param msg_len Message length
  */
 void comm_send_legacy(communicator_t *comm, const unit_id_t unit_id,
-                      const uint8_t *msg, const size_t msg_len);
+                      const uint8_t *msg, const size_t msg_len,
+                      const char *scenario);
 
 /**
  * Receive a message from the peer with optional signature verification.

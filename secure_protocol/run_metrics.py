@@ -101,54 +101,16 @@ def main():
                         if m: metrics["latency"]["emergency_brake"] = int(m.group(1))
                         metrics["stack"]["emergency_brake"] = max(metrics["stack"]["emergency_brake"], local_max_stack)
                     
-                    # 4. Bandwidth (By message type)
-                    m_msg = re.search(r"sending message of length (\d+).*msg_type=(\d+)", line)
-                    if m_msg:
-                        size = int(m_msg.group(1))
-                        mtype = int(m_msg.group(2))
-                        metrics["bandwidth"]["total"] += size
-                        if is_eot:
-                            if mtype == 0 or mtype == 1: # PUBKEY, NONCE
-                                metrics["bandwidth"]["pairing"] += size
-                            elif mtype == 2: # STATUS
-                                metrics["bandwidth"]["status_request"] += size
-                            elif mtype == 3: # EMERGENCY
-                                metrics["bandwidth"]["emergency_brake"] += size
-                            else:
-                                metrics["bandwidth"]["other"] += size
-                        else: # HOT
-                            if mtype == 0 or mtype == 1 or mtype == 2: # ADV, PUBKEY_AND_COMMIT, NONCE
-                                metrics["bandwidth"]["pairing"] += size
-                            elif mtype == 3: # STATUS
-                                metrics["bandwidth"]["status_request"] += size
-                            elif mtype == 4: # EMERGENCY
-                                metrics["bandwidth"]["emergency_brake"] += size
-                            else:
-                                metrics["bandwidth"]["other"] += size
-
-                    m_legacy = re.search(r"sent legacy message of length (\d+)(?: \(payload=(\d+)\))?", line)
-                    if m_legacy:
-                        size = int(m_legacy.group(1))
-                        metrics["bandwidth"]["total"] += size
-                        payload_len = int(m_legacy.group(2)) if m_legacy.group(2) else None
-                        if payload_len is not None:
-                            if payload_len == 3: # "ARM"
-                                metrics["bandwidth"]["pairing"] += size
-                            elif payload_len == 4 or payload_len >= 12: # "STAT" or status struct
-                                metrics["bandwidth"]["status_request"] += size
-                            elif payload_len == 2 or payload_len == 6: # "EB" or "ACK EB"
-                                metrics["bandwidth"]["emergency_brake"] += size
-                            else:
-                                metrics["bandwidth"]["other"] += size
+                    # 4. Bandwidth (Using explicit [METRIC] markers for more accuracy)
+                    m_metric = re.search(r"\[METRIC\] type=\w+ scenario=(\w+) bits=(\d+)", line)
+                    if m_metric:
+                        scenario = m_metric.group(1)
+                        bits = int(m_metric.group(2))
+                        metrics["bandwidth"]["total"] += bits
+                        if scenario in metrics["bandwidth"]:
+                            metrics["bandwidth"][scenario] += bits
                         else:
-                            if size == 11:
-                                metrics["bandwidth"]["pairing"] += size
-                            elif size == 12 or size == 20:
-                                metrics["bandwidth"]["status_request"] += size
-                            elif size == 10 or size == 14:
-                                metrics["bandwidth"]["emergency_brake"] += size
-                            else:
-                                metrics["bandwidth"]["other"] += size
+                            metrics["bandwidth"]["other"] += bits
 
         # Fallback latches: Ensure monotonic scenarios have at least current peak if phase completed but marker missed
         metrics["stack"]["status_request"] = max(metrics["stack"]["status_request"], metrics["stack"]["pairing"])
@@ -180,10 +142,10 @@ def main():
 
         # 1. Bandwidth (in bits)
         for s_key, s_name in scenarios:
-            m_val = modern["bandwidth"].get(s_key, 0) * 8
-            l_val = legacy["bandwidth"].get(s_key, 0) * 8 if legacy else 0
+            m_val = modern["bandwidth"].get(s_key, 0)
+            l_val = legacy["bandwidth"].get(s_key, 0) if legacy else 0
             change = get_change(m_val, l_val)
-            print(f" {'Bandwidth':<18} | {s_name:<18} | [{l_val:>4}] , [{m_val:>4}] , [{change:>6}],")
+            print(f" {'Bandwidth (bits)':<18} | {s_name:<18} | [{l_val:>4}] , [{m_val:>4}] , [{change:>6}],")
         
         print("-" * width)
         # 2. Latency
