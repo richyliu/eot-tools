@@ -91,8 +91,8 @@ void comm_send_legacy(communicator_t *comm, const unit_id_t unit_id,
     ext_io_eprintf("Failed to send legacy message\n");
     ext_exit(1);
   }
-  ext_io_printf("[INFO] sent legacy message of length %u (payload=%u)\n", total_len,
-                msg_len);
+  ext_io_printf("[INFO] sent legacy message of length %u (payload=%u)\n",
+                total_len, msg_len);
 }
 
 ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,
@@ -112,7 +112,7 @@ ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,
 
   if (recv_len >= 4 && ext_memcmp(buffer, "OLD!", 4) == 0) {
     if (recv_len < 4 + (ssize_t)sizeof(unit_id_t)) {
-      ext_io_eprintf("Received legacy message too short (%zd bytes)\n",
+      ext_io_eprintf("Received legacy message too short (%u bytes)\n",
                      recv_len);
       return -2;
     }
@@ -122,6 +122,8 @@ ssize_t comm_recv(communicator_t *comm, session_id_t *session_id,
                      payload_len);
       ext_exit(1);
     }
+    ext_io_printf("[INFO] received legacy message of length %u (payload=%u)\n",
+                  recv_len, payload_len);
     ext_memcpy(msg, buffer + 4, payload_len);
     return -((ssize_t)payload_len);
   }

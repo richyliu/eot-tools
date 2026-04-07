@@ -82,15 +82,20 @@ ssize_t comm_recv_raw(comm_handle_t *handle, uint8_t *buffer, size_t max_len) {
       (uint16_t)length_bytes[0] | ((uint16_t)length_bytes[1] << 8);
 
   if (length > max_len) {
+    ext_io_eprintf("Length %u is greater than max_len %u\n", length, max_len);
     return -2;
   }
 
+  int baud_rate = 1200; // in bits per second (assuming 8 bits per byte)
+  uint32_t byte_timeout = timeout + length * 1000 * 8 / baud_rate;
   for (uint16_t i = 0; i < length; i++) {
-    if (uart_read_byte_timeout(uart, &buffer[i], timeout) < 0) {
-      ext_io_eprintf("Timeout waiting for data byte %u\n", i);
+    if (uart_read_byte_timeout(uart, &buffer[i], byte_timeout) < 0) {
+      ext_io_eprintf("Timeout waiting for data byte %u of %u\n", i, length);
       return -1;
     }
   }
+
+  ext_io_eprintf("Raw UART RX: %u bytes\n", length);
 
   return (ssize_t)length;
 }

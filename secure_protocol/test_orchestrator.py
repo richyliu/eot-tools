@@ -470,7 +470,7 @@ def main():
     parser.add_argument("--seed", type=int, help="Specify a base RNG seed (ARM only)")
     parser.add_argument("--baud", type=int, default=1200, help="Specify a baud rate for the UART bridge (ARM only, default: 1200)")
     parser.add_argument("--parallel", action="store_true", help="Run tests in parallel")
-    parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of parallel jobs (default: 1)")
+    parser.add_argument("-j", "--jobs", type=int, default=4, help="Number of parallel jobs (default: 4)")
     args = parser.parse_args()
 
     arm_mode = args.arm
@@ -488,7 +488,7 @@ def main():
         test_names = [name for name in TESTS.keys() if name != "timeout"]
 
     # Only run in parallel if requested AND we have multiple tests
-    parallel = args.parallel or (jobs > 1 and len(test_names) > 1)
+    parallel = args.parallel and jobs > 1 and len(test_names) > 1
     
     # If we decided not to be parallel, force jobs to 1 for the semaphore
     if not parallel:

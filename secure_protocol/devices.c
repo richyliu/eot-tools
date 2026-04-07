@@ -58,16 +58,36 @@ void wait_for_arm_button_press(void) {
   ext_io_getc();
 }
 
-void eot_handle_legacy_message(const uint8_t *msg, size_t msg_len) {
-  (void)msg;
-  (void)msg_len;
-  ext_io_puts("EOT: Received legacy message (not implemented)\n");
-}
+// from the patent US5374015A
+#define HOT_LEGACY_MSG_LEN_BITS (456 + 24 + 64 * 3)
+#define EOT_LEGACY_MSG_LEN_BITS (69 + (11 + 64) * 2)
 
-void hot_handle_legacy_message(const uint8_t *msg, size_t msg_len) {
-  (void)msg;
-  (void)msg_len;
-  ext_io_puts("HOT: Received legacy message (not implemented)\n");
+/**
+ * The legacy messages are quite long due to the bit sync structure (see patent
+ * US5374015A). Instead of actually using the format directly (which requires
+ * complicated bitpacking), we simply pad the message to the right length (since
+ * it is typically a longer one). This is not a perfect emulation of the legacy
+ * protocol, but it is good enough for our purposes.
+ */
+static void send_padded_legacy_message(communicator_t *comm, unit_id_t unit_id,
+                                       const uint8_t *payload,
+                                       size_t payload_len,
+                                       size_t padded_len_bits) {
+  // subtract 10 for unit_id (4 bytes), message length (4 bytes) and UART len (2
+  // bytes)
+  size_t actual_len = padded_len_bits / 8 - 10;
+  if (actual_len < payload_len) {
+    ext_io_printf("legacy padding helper length error %d < %d\n", actual_len,
+                  payload_len);
+    return;
+  }
+  uint8_t transmit_buffer[actual_len];
+  ext_memset(transmit_buffer, 0, sizeof(transmit_buffer));
+  ext_memcpy(transmit_buffer, payload, payload_len);
+  comm_send_legacy(comm, unit_id, transmit_buffer, sizeof(transmit_buffer));
+  ext_io_printf("[INFO] sent padded legacy message of actual length %d "
+                "(desired %d bits)\n",
+                sizeof(transmit_buffer), padded_len_bits);
 }
 
 void eot_run(communicator_t *comm, unit_id_t unit_id) {
@@ -104,16 +124,19 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
       switch (state) {
       case EOT_IDLE:
         if (is_legacy_only()) {
-          ext_io_puts("Legacy-only mode: Entering legacy mode and sending legacy ARM command\n");
+          ext_io_puts("Legacy-only mode: Entering legacy mode and sending "
+                      "legacy ARM command\n");
           state = EOT_LEGACY;
           timer_now(&last_status_time);
-          comm_send_legacy(comm, unit_id, (uint8_t *)"ARM", 3);
+          send_padded_legacy_message(comm, unit_id, (uint8_t *)"ARM", 3,
+                                     EOT_LEGACY_MSG_LEN_BITS);
           break;
         }
         ext_io_puts("EOT_IDLE: waiting for user to push TEST button\n");
         ext_io_puts("Options:\n");
         ext_io_puts("  1: Push TEST button to start pairing\n");
-        ext_io_puts("  2: Hold TEST button for 5 seconds to enter legacy mode\n");
+        ext_io_puts(
+            "  2: Hold TEST button for 5 seconds to enter legacy mode\n");
         ext_io_puts("Enter choice: ");
         ext_io_flush();
         ext_io_scan_int(&choice);
@@ -125,8 +148,10 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
           ext_io_printf("EOT entering legacy mode. Unit ID: %05u\n", unit_id);
           state = EOT_LEGACY;
           timer_now(&last_status_time);
-          comm_send_legacy(comm, unit_id, (uint8_t *)"ARM", 3);
-          comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id, sizeof(unit_id_t), NULL);
+          send_padded_legacy_message(comm, unit_id, (uint8_t *)"ARM", 3,
+                                     EOT_LEGACY_MSG_LEN_BITS);
+          comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id,
+                    sizeof(unit_id_t), NULL);
         } else {
           ext_io_puts("Invalid choice, staying in idle state.\n");
         }
@@ -164,9 +189,11 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
         if (timer_diff_ms(&now, &last_status_time) >= next_status_delay_ms) {
           ext_io_puts("EOT: Sending periodic legacy status update\n");
           get_eot_status(&status);
-          comm_send_legacy(comm, unit_id, (uint8_t *)&status, sizeof(status));
+          send_padded_legacy_message(comm, unit_id, (uint8_t *)&status,
+                                     sizeof(status), EOT_LEGACY_MSG_LEN_BITS);
           if (!is_legacy_only()) {
-            comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id, sizeof(unit_id_t), NULL);
+            comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id,
+                      sizeof(unit_id_t), NULL);
           }
           last_status_time = now;
           next_status_delay_ms = 30000 + (ext_random_u32() % 5000);
@@ -174,11 +201,14 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
         ext_io_set_nonblocking(1);
         char buf[16];
         if (ext_io_getline(buf, sizeof(buf)) >= 0) {
-          ext_io_puts("EOT: TEST button pressed, sending legacy status update\n");
+          ext_io_puts(
+              "EOT: TEST button pressed, sending legacy status update\n");
           get_eot_status(&status);
-          comm_send_legacy(comm, unit_id, (uint8_t *)&status, sizeof(status));
+          send_padded_legacy_message(comm, unit_id, (uint8_t *)&status,
+                                     sizeof(status), EOT_LEGACY_MSG_LEN_BITS);
           if (!is_legacy_only()) {
-            comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id, sizeof(unit_id_t), NULL);
+            comm_send(comm, 0, (msg_type_t)EOT_MSG_UPGRADE, (uint8_t *)&unit_id,
+                      sizeof(unit_id_t), NULL);
           }
           last_status_time = now;
         }
@@ -205,23 +235,28 @@ void eot_run(communicator_t *comm, unit_id_t unit_id) {
       unit_id_t recved_legacy_unit_id;
       ext_memcpy(&recved_legacy_unit_id, msg, sizeof(unit_id_t));
       if (recved_legacy_unit_id != unit_id) {
-          ext_io_printf("EOT: received legacy message for unit %u, but I am unit %u. Ignoring.\n", recved_legacy_unit_id, unit_id);
-          continue;
+        ext_io_printf("EOT: received legacy message for unit %u, but I am unit "
+                      "%u. Ignoring.\n",
+                      recved_legacy_unit_id, unit_id);
+        continue;
       }
-      
+
       const uint8_t *payload = msg + sizeof(unit_id_t);
       size_t payload_len = (size_t)(-recv_len) - sizeof(unit_id_t);
-      
+
       if (payload_len >= 4 && ext_memcmp(payload, "STAT", 4) == 0) {
         ext_io_puts("EOT: Received legacy status request\n");
         get_eot_status(&status);
-        comm_send_legacy(comm, unit_id, (uint8_t *)&status, sizeof(status));
+        send_padded_legacy_message(comm, unit_id, (uint8_t *)&status,
+                                   sizeof(status), EOT_LEGACY_MSG_LEN_BITS);
       } else if (payload_len >= 2 && ext_memcmp(payload, "EB", 2) == 0) {
         ext_io_puts("EOT: Received legacy emergency brake request\n");
         eot_emergency_brake();
-        comm_send_legacy(comm, unit_id, (uint8_t *)"ACK EB", 6);
+        send_padded_legacy_message(comm, unit_id, (uint8_t *)"ACK EB", 6,
+                                   EOT_LEGACY_MSG_LEN_BITS);
       } else {
-        eot_handle_legacy_message(payload, payload_len);
+        ext_io_printf("EOT: Received unknown legacy message (payload_len=%d)\n",
+                      payload_len);
       }
     } else {
       switch (state) {
@@ -372,7 +407,8 @@ void hot_run(communicator_t *comm) {
     }
     legacy_unit_id = (unit_id_t)choice;
     state = HOT_LEGACY;
-    ext_io_printf("HOT: Legacy only mode active for unit ID %05u\n", legacy_unit_id);
+    ext_io_printf("HOT: Legacy only mode active for unit ID %05u\n",
+                  legacy_unit_id);
   }
 
   while (1) {
@@ -410,7 +446,9 @@ void hot_run(communicator_t *comm) {
                           "new protocol to pair.\n",
                           choice);
           } else {
-            ext_io_printf("Entering legacy mode with unit ID %05u. Waiting for EOT message...\n", choice);
+            ext_io_printf("Entering legacy mode with unit ID %05u. Waiting for "
+                          "EOT message...\n",
+                          choice);
             legacy_unit_id = (unit_id_t)choice;
             state = HOT_LEGACY;
             timer_now(&pairing_start);
@@ -423,13 +461,15 @@ void hot_run(communicator_t *comm) {
         ext_io_set_nonblocking(1);
         char buf[16];
         if (ext_io_getline(buf, sizeof(buf)) >= 0) {
-            if (timer_diff_ms(&now, &legacy_arm_timer) < 5000) {
-                ext_io_puts("HOT: ARM NOW pressed! SYSTEM ARMED (Legacy Mode)\n");
-                ext_io_printf("HOT: legacy pairing took %d ms\n", timer_diff_ms(&now, &pairing_start));
-                state = HOT_LEGACY_ARMED;
-            } else {
-                ext_io_puts("HOT: ARM timer expired or button pressed too early. Wait for EOT status.\n");
-            }
+          if (timer_diff_ms(&now, &legacy_arm_timer) < 5000) {
+            ext_io_puts("HOT: ARM NOW pressed! SYSTEM ARMED (Legacy Mode)\n");
+            ext_io_printf("HOT: legacy pairing took %d ms\n",
+                          timer_diff_ms(&now, &pairing_start));
+            state = HOT_LEGACY_ARMED;
+          } else {
+            ext_io_puts("HOT: ARM timer expired or button pressed too early. "
+                        "Wait for EOT status.\n");
+          }
         }
         ext_io_set_nonblocking(0);
         break;
@@ -446,10 +486,14 @@ void hot_run(communicator_t *comm) {
         if (choice == 1) {
           ext_io_puts("HOT: Requesting legacy status update\n");
           timer_now(&last_transmit_time);
-          comm_send_legacy(comm, legacy_unit_id, (uint8_t *)"STAT", 4);
+          send_padded_legacy_message(comm, legacy_unit_id, (uint8_t *)"STAT", 4,
+                                     HOT_LEGACY_MSG_LEN_BITS);
+          state = HOT_WAIT_FOR_LEGACY_STATUS_ACK;
+          timer_now(&last_transmit_time);
         } else if (choice == 2) {
           ext_io_puts("HOT: Sending legacy emergency brake request\n");
-          comm_send_legacy(comm, legacy_unit_id, (uint8_t *)"EB", 2);
+          send_padded_legacy_message(comm, legacy_unit_id, (uint8_t *)"EB", 2,
+                                     HOT_LEGACY_MSG_LEN_BITS);
           state = HOT_WAIT_FOR_LEGACY_EB_ACK;
           timer_now(&last_transmit_time);
         } else if (choice == 3) {
@@ -458,10 +502,17 @@ void hot_run(communicator_t *comm) {
         }
         break;
       }
+      case HOT_WAIT_FOR_LEGACY_STATUS_ACK:
+        if (timer_diff_ms(&now, &last_transmit_time) >= 10000) {
+          ext_io_puts("HOT: legacy status request timed out\n");
+          state = HOT_LEGACY_ARMED;
+        }
+        break;
       case HOT_WAIT_FOR_LEGACY_EB_ACK:
         if (timer_diff_ms(&now, &last_transmit_time) >= 10000) {
           ext_io_puts("HOT: Retransmitting legacy emergency brake request\n");
-          comm_send_legacy(comm, legacy_unit_id, (uint8_t *)"EB", 2);
+          send_padded_legacy_message(comm, legacy_unit_id, (uint8_t *)"EB", 2,
+                                     HOT_LEGACY_MSG_LEN_BITS);
           timer_now(&last_transmit_time);
         }
         break;
@@ -569,24 +620,41 @@ void hot_run(communicator_t *comm) {
 
       if (state == HOT_LEGACY) {
         if (recved_legacy_unit_id == legacy_unit_id) {
-          ext_io_printf("HOT: Received status from EOT %05u. Press enter to ARM NOW (you have 5 seconds)...\n", legacy_unit_id);
+          ext_io_printf("HOT: Received status from EOT %05u. Press enter to "
+                        "ARM NOW (you have 5 seconds)...\n",
+                        legacy_unit_id);
           timer_now(&legacy_arm_timer);
         }
-      } else if (state == HOT_LEGACY_ARMED || state == HOT_WAIT_FOR_LEGACY_EB_ACK) {
+      } else if (state == HOT_LEGACY_ARMED ||
+                 state == HOT_WAIT_FOR_LEGACY_STATUS_ACK ||
+                 state == HOT_WAIT_FOR_LEGACY_EB_ACK) {
         if (recved_legacy_unit_id == legacy_unit_id) {
-          if (payload_len == sizeof(eot_status_t)) {
-             eot_status_t status;
-             ext_memcpy(&status, payload, sizeof(eot_status_t));
-             display_eot_status(&status);
-             if (timer_diff_ms(&now, &last_transmit_time) < 10000) {
-                 ext_io_printf("HOT: legacy status update took %d ms\n", timer_diff_ms(&now, &last_transmit_time));
-             } else {
-                 ext_io_puts("HOT: received unsolicited legacy status update\n");
-             }
-          } else if (payload_len >= 6 && ext_memcmp(payload, "ACK EB", 6) == 0) {
-             ext_io_printf("HOT: Received legacy emergency brake acknowledgment. %d ms elapsed since last request.\n", timer_diff_ms(&now, &last_transmit_time));
-             state = HOT_LEGACY_ARMED;
+          if (payload_len >= 6 && ext_memcmp(payload, "ACK EB", 6) == 0) {
+            ext_io_printf("HOT: Received legacy emergency brake "
+                          "acknowledgment. %d ms elapsed since last request.\n",
+                          timer_diff_ms(&now, &last_transmit_time));
+            state = HOT_LEGACY_ARMED;
+          } else if (payload_len >= sizeof(eot_status_t)) {
+            // Note: we don't know for sure if this is a status update, as there
+            // is nothing marking it as such. This could be a future fix to add
+            // a legacy message type field.
+            eot_status_t status;
+            ext_memcpy(&status, payload, sizeof(eot_status_t));
+            display_eot_status(&status);
+            if (timer_diff_ms(&now, &last_transmit_time) < 10000) {
+              ext_io_printf("HOT: legacy status update took %d ms\n",
+                            timer_diff_ms(&now, &last_transmit_time));
+            } else {
+              ext_io_puts("HOT: received unsolicited legacy status update\n");
+            }
+            if (state == HOT_WAIT_FOR_LEGACY_STATUS_ACK) {
+              state = HOT_LEGACY_ARMED;
+            }
           }
+        } else {
+          ext_io_printf("HOT: unexpectedly received legacy message from "
+                        "different unit ID %u\n",
+                        recved_legacy_unit_id);
         }
       } else {
         if (!is_legacy_only()) {
@@ -600,7 +668,9 @@ void hot_run(communicator_t *comm) {
           legacy_unit_id = recved_legacy_unit_id;
           state = HOT_LEGACY_ARMED;
         } else {
-          hot_handle_legacy_message(payload, payload_len);
+          ext_io_printf(
+              "HOT: Received unknown legacy message (payload_len=%d)\n",
+              payload_len);
         }
       }
     } else {
@@ -610,10 +680,16 @@ void hot_run(communicator_t *comm) {
         ext_io_printf(
             "HOT: received protocol upgrade request from legacy unit ID %u\n",
             recent_upgradable_legacy_unit_id);
-        if (!is_legacy_only() && (state == HOT_LEGACY || state == HOT_LEGACY_ARMED || state == HOT_WAIT_FOR_LEGACY_EB_ACK) &&
+        if (!is_legacy_only() &&
+            (state == HOT_LEGACY || state == HOT_LEGACY_ARMED ||
+             state == HOT_WAIT_FOR_LEGACY_STATUS_ACK ||
+             state == HOT_WAIT_FOR_LEGACY_EB_ACK) &&
             recent_upgradable_legacy_unit_id == legacy_unit_id) {
-          ext_io_printf("HOT: Requested to pair in legacy mode with unit ID %05u, "
-                        "but it supports the new protocol. Aborting legacy pairing to prevent downgrade attack.\n", legacy_unit_id);
+          ext_io_printf(
+              "HOT: Requested to pair in legacy mode with unit ID %05u, "
+              "but it supports the new protocol. Aborting legacy pairing to "
+              "prevent downgrade attack.\n",
+              legacy_unit_id);
           state = HOT_IDLE;
         }
       }

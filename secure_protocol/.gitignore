@@ -4,3 +4,4 @@ hot*
 /tmp_sockets
 
 test_all_log.txt
+metrics_report_*.txt
